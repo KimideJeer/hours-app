@@ -4,6 +4,11 @@ session_start();
 if (empty($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(32)); }
 $csrf = $_SESSION['csrf'];
 
+
+// -------------------------------------------------------------
+// Databaseconnectie via PDO (prepared statements voor veiligheid).
+// Config lezen uit config.php (host, dbname, user, pass).
+// -------------------------------------------------------------
 $config = require __DIR__ . '/../config.php';
 $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4', $config['host'], $config['port'], $config['dbname']);
 try {
@@ -20,11 +25,28 @@ try {
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function redirect($url){ header("Location: $url"); exit; }
 
+// -------------------------------------------------------------
+// Router-achtige afhandeling via querystring ?action=...
+//   - list (default): tonen van formulier + tabel
+//   - create (POST): nieuwe uren opslaan
+//   - edit (GET/POST): formulier vullen en wijzigingen opslaan
+//   - delete (POST): rij verwijderen
+// -------------------------------------------------------------
 $action = $_GET['action'] ?? 'list';
+
+/**
+ * $errors: validatieberichten per veld.
+ * Wordt gevuld als controle faalt, en weergegeven naast inputs.
+ */
 $errors = [];
 
+
+// -------------------------------------------------------------
+// CREATE — nieuwe uren opslaan
+// -------------------------------------------------------------
 if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
+      // Lees en “normaliseer” invoer
   $entry_date = $_POST['entry_date'] ?? '';
   $project = trim($_POST['project'] ?? '');
   $task = trim($_POST['task'] ?? '');
@@ -43,6 +65,10 @@ if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 
+// -------------------------------------------------------------
+// DELETE — record verwijderen
+// - We gebruiken een POST met verborgen CSRF-token + confirm()
+// -------------------------------------------------------------
 if ($action === 'delete' && isset($_GET['id'])) {
   if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
@@ -52,11 +78,15 @@ if ($action === 'delete' && isset($_GET['id'])) {
   }
 }
 
+// -------------------------------------------------------------
+// EDIT — record ophalen (GET) of bijwerken (POST)
+// -------------------------------------------------------------
 $editRow = null;
 if ($action === 'edit' && isset($_GET['id'])) {
   $id = (int)$_GET['id'];
   if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
+           // Zelfde validatie als bij create
     $entry_date = $_POST['entry_date'] ?? '';
     $project = trim($_POST['project'] ?? '');
     $task = trim($_POST['task'] ?? '');
@@ -71,28 +101,35 @@ if ($action === 'edit' && isset($_GET['id'])) {
       $stmt->execute([$entry_date, $project, $task, $hours, $note ?: null, $id]);
       redirect('index.php');
     } else {
+       // Validatie faalde: vul het formulier opnieuw met de geposte waarden
       $editRow = ['id'=>$id,'entry_date'=>$entry_date,'project'=>$project,'task'=>$task,'hours'=>$hours,'note'=>$note];
     }
   } else {
+        // GET: haal bestaande rij op om formulier te vullen
     $st = $pdo->prepare("SELECT * FROM time_entries WHERE id=?");
     $st->execute([$id]);
     $editRow = $st->fetch();
     if (!$editRow) { http_response_code(404); die("Not found"); }
   }
 }
-
+// -------------------------------------------------------------
+// LIST — ophalen van rijen + eenvoudige filters en totalen
+// -------------------------------------------------------------
 $from = $_GET['from'] ?? '';
 $to = $_GET['to'] ?? '';
 $where = []; $params = [];
+
+// Optionele filter op datumbereik
 if ($from && DateTime::createFromFormat('Y-m-d', $from)) { $where[] = "entry_date >= ?"; $params[] = $from; }
 if ($to && DateTime::createFromFormat('Y-m-d', $to)) { $where[] = "entry_date <= ?"; $params[] = $to; }
+// Query opbouwen met filters
 $sql = "SELECT * FROM time_entries";
 if ($where) { $sql .= " WHERE " . implode(" AND ", $where); }
 sql:;
-$sql .= " ORDER BY entry_date DESC, id DESC";
+$sql .= " ORDER BY entry_date DESC, id DESC"; // volgorde
 $rows = $pdo->prepare($sql); $rows->execute($params); $rows = $rows->fetchAll();
 
-$totalHours = 0.0; foreach ($rows as $r) { $totalHours += (float)$r['hours']; }
+$totalHours = 0.0; foreach ($rows as $r) { $totalHours += (float)$r['hours']; } // Totaal aantal uren berekenen (server-side)
 ?>
 <!doctype html>
 <html lang="nl">
