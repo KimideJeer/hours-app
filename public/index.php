@@ -8,10 +8,8 @@ require __DIR__ . '/../src/auth.php';   // auth helpers laden
 requireLogin('login.php');              // pagina afschermen (redirect naar login)
 $uid = currentUserId();                 // id van ingelogde gebruiker (gebruik je bij CRUD)
 
-
 // -------------------------------------------------------------
 // Databaseconnectie via PDO (prepared statements voor veiligheid).
-// Config lezen uit config.php (host, dbname, user, pass).
 // -------------------------------------------------------------
 $config = require __DIR__ . '/../config.php';
 $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4', $config['host'], $config['port'], $config['dbname']);
@@ -22,7 +20,7 @@ try {
   ]);
 } catch (PDOException $e) {
   http_response_code(500);
-  echo "<h1>DB connection failed</h1><pre>{$e->getMessage()}</pre>";
+  echo "<h1>DB connection failed</h1><pre>" . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</pre>";
   exit;
 }
 
@@ -31,31 +29,23 @@ function redirect($url){ header("Location: $url"); exit; }
 
 // -------------------------------------------------------------
 // Router-achtige afhandeling via querystring ?action=...
-//   - list (default): tonen van formulier + tabel
-//   - create (POST): nieuwe uren opslaan
-//   - edit (GET/POST): formulier vullen en wijzigingen opslaan
-//   - delete (POST): rij verwijderen
 // -------------------------------------------------------------
 $action = $_GET['action'] ?? 'list';
 
-/**
- * $errors: validatieberichten per veld.
- * Wordt gevuld als controle faalt, en weergegeven naast inputs.
- */
+/** Validatiefouten per veld */
 $errors = [];
-
 
 // -------------------------------------------------------------
 // CREATE — nieuwe uren opslaan
 // -------------------------------------------------------------
 if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
-      // Lees en “normaliseer” invoer
+
   $entry_date = $_POST['entry_date'] ?? '';
-  $project = trim($_POST['project'] ?? '');
-  $task = trim($_POST['task'] ?? '');
-  $hours = $_POST['hours'] ?? '';
-  $note = trim($_POST['note'] ?? '');
+  $project    = trim($_POST['project'] ?? '');
+  $task       = trim($_POST['task'] ?? '');
+  $hours      = $_POST['hours'] ?? '';
+  $note       = trim($_POST['note'] ?? '');
 
   if (!$entry_date || !DateTime::createFromFormat('Y-m-d', $entry_date)) { $errors['entry_date'] = 'Required (YYYY-MM-DD)'; }
   if ($project === '') { $errors['project'] = 'Required'; }
@@ -63,102 +53,89 @@ if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['hours'] = '0 < hours ≤ 24'; }
 
   if (!$errors) {
-$stmt = $pdo->prepare("INSERT INTO time_entries (user_id, entry_date, project, task, hours, note) VALUES (?,?,?,?,?,?)");
-$stmt->execute([$uid, $entry_date, $project, $task, $hours, $note ?: null]);
+    $stmt = $pdo->prepare("INSERT INTO time_entries (user_id, entry_date, project, task, hours, note) VALUES (?,?,?,?,?,?)");
+    $stmt->execute([$uid, $entry_date, $project, $task, $hours, $note ?: null]);
     redirect('index.php');
   }
 }
 
 // -------------------------------------------------------------
-// DELETE — record verwijderen
-// - We gebruiken een POST met verborgen CSRF-token + confirm()
+// DELETE — record verwijderen (alleen eigen)
 // -------------------------------------------------------------
 if ($action === 'delete' && isset($_GET['id'])) {
   if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
     $id = (int)($_GET['id'] ?? 0);
-$st = $pdo->prepare("DELETE FROM time_entries WHERE id=? AND user_id=?");
-$st->execute([(int)($_GET['id'] ?? 0), $uid]);
+    $st = $pdo->prepare("DELETE FROM time_entries WHERE id=? AND user_id=?");
+    $st->execute([$id, $uid]);
     redirect('index.php');
   }
 }
 
 // -------------------------------------------------------------
-// EDIT — record ophalen (GET) of bijwerken (POST)
+// EDIT — record ophalen (GET) of bijwerken (POST) (alleen eigen)
 // -------------------------------------------------------------
 $editRow = null;
 if ($action === 'edit' && isset($_GET['id'])) {
   $id = (int)$_GET['id'];
+
   if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
-           // Zelfde validatie als bij create
+
     $entry_date = $_POST['entry_date'] ?? '';
-    $project = trim($_POST['project'] ?? '');
-    $task = trim($_POST['task'] ?? '');
-    $hours = $_POST['hours'] ?? '';
-    $note = trim($_POST['note'] ?? '');
+    $project    = trim($_POST['project'] ?? '');
+    $task       = trim($_POST['task'] ?? '');
+    $hours      = $_POST['hours'] ?? '';
+    $note       = trim($_POST['note'] ?? '');
+
     if (!$entry_date || !DateTime::createFromFormat('Y-m-d', $entry_date)) { $errors['entry_date'] = 'Required (YYYY-MM-DD)'; }
     if ($project === '') { $errors['project'] = 'Required'; }
     if ($task === '') { $errors['task'] = 'Required'; }
     if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['hours'] = '0 < hours ≤ 24'; }
+
     if (!$errors) {
-$stmt = $pdo->prepare("UPDATE time_entries
-  SET entry_date=?, project=?, task=?, hours=?, note=?, updated_at=NOW()
-  WHERE id=? AND user_id=?");
-$stmt->execute([$entry_date, $project, $task, $hours, $note ?: null, $id, $uid]);
+      $stmt = $pdo->prepare("UPDATE time_entries
+        SET entry_date=?, project=?, task=?, hours=?, note=?, updated_at=NOW()
+        WHERE id=? AND user_id=?");
+      $stmt->execute([$entry_date, $project, $task, $hours, $note ?: null, $id, $uid]);
       redirect('index.php');
     } else {
-       // Validatie faalde: vul het formulier opnieuw met de geposte waarden
       $editRow = ['id'=>$id,'entry_date'=>$entry_date,'project'=>$project,'task'=>$task,'hours'=>$hours,'note'=>$note];
     }
   } else {
-        // GET: haal bestaande rij op om formulier te vullen
-      $st = $pdo->prepare("SELECT * FROM time_entries WHERE id=? AND user_id=?");
-      $st->execute([$id, $uid]);
-
+    $st = $pdo->prepare("SELECT * FROM time_entries WHERE id=? AND user_id=?");
+    $st->execute([$id, $uid]);
     $editRow = $st->fetch();
     if (!$editRow) { http_response_code(404); die("Not found"); }
   }
 }
+
 // -------------------------------------------------------------
 // LIST — alleen eigen records + optionele datumfilters
 // -------------------------------------------------------------
 $from = $_GET['from'] ?? '';
 $to   = $_GET['to']   ?? '';
 
-$clauses = [];   // voorwaarden (WHERE-delen)
-$params  = [];   // prepared statement waarden
+$where  = ["user_id = ?"];   // scope op ingelogde user
+$params = [$uid];
 
-// Altijd scopen op de ingelogde gebruiker
-$clauses[] = "user_id = ?";
-$params[]  = $uid;
-
-// Optionele datumfilters
 if ($from && DateTime::createFromFormat('Y-m-d', $from)) {
-  $clauses[] = "entry_date >= ?";
-  $params[]  = $from;
+  $where[]  = "entry_date >= ?";
+  $params[] = $from;
 }
 if ($to && DateTime::createFromFormat('Y-m-d', $to)) {
-  $clauses[] = "entry_date <= ?";
-  $params[]  = $to;
+  $where[]  = "entry_date <= ?";
+  $params[] = $to;
 }
 
-// SQL opbouwen (alleen WHERE toevoegen als er clauses zijn)
-$sql = "SELECT * FROM time_entries";
-if (!empty($clauses)) {
-  $sql .= " WHERE " . implode(" AND ", $clauses);
-}
-$sql .= " ORDER BY entry_date DESC, id DESC";
-
-// Uitvoeren
-$st = $pdo->prepare($sql);
+$sql = "SELECT * FROM time_entries WHERE " . implode(" AND ", $where) . " ORDER BY entry_date DESC, id DESC";
+$st  = $pdo->prepare($sql);
 $st->execute($params);
 $rows = $st->fetchAll();
 
-$sql .= " ORDER BY entry_date DESC, id DESC"; // volgorde
-$rows = $pdo->prepare($sql); $rows->execute($params); $rows = $rows->fetchAll();
-
-$totalHours = 0.0; foreach ($rows as $r) { $totalHours += (float)$r['hours']; } // Totaal aantal uren berekenen (server-side)
+// Totaal uren berekenen
+$totalHours = 0.0;
+foreach ($rows as $r) { $totalHours += (float)$r['hours']; }
 ?>
 <!doctype html>
 <html lang="nl">
@@ -185,6 +162,11 @@ $totalHours = 0.0; foreach ($rows as $r) { $totalHours += (float)$r['hours']; } 
 </head>
 <body>
   <h1>Urenregistratie (simpel)</h1>
+
+  <p class="muted">
+    Ingelogd als <strong><?=h(currentUserEmail())?></strong>
+    — <a class="btn secondary" href="logout.php" style="display:inline-block;margin-left:8px;">Uitloggen</a>
+  </p>
 
   <form class="card" method="get">
     <div class="row">
@@ -302,6 +284,6 @@ $totalHours = 0.0; foreach ($rows as $r) { $totalHours += (float)$r['hours']; } 
     </tbody>
   </table>
 
-  <p class="muted">Simpel demo-systeem (geen users/auth). Uitbreidbaar met projecten/taken-tabellen en login.</p>
+  <p class="muted">Simpel demo-systeem met login en user-scope. Uitbreidbaar met projecten/taken en rapportages.</p>
 </body>
 </html>
