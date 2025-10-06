@@ -4,6 +4,10 @@ session_start();
 if (empty($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(32)); }
 $csrf = $_SESSION['csrf'];
 
+require __DIR__ . '/../src/auth.php';   // auth helpers laden
+requireLogin('login.php');              // pagina afschermen (redirect naar login)
+$uid = currentUserId();                 // id van ingelogde gebruiker (gebruik je bij CRUD)
+
 
 // -------------------------------------------------------------
 // Databaseconnectie via PDO (prepared statements voor veiligheid).
@@ -59,8 +63,8 @@ if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
   if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['hours'] = '0 < hours ≤ 24'; }
 
   if (!$errors) {
-    $stmt = $pdo->prepare("INSERT INTO time_entries (entry_date, project, task, hours, note) VALUES (?,?,?,?,?)");
-    $stmt->execute([$entry_date, $project, $task, $hours, $note ?: null]);
+$stmt = $pdo->prepare("INSERT INTO time_entries (user_id, entry_date, project, task, hours, note) VALUES (?,?,?,?,?,?)");
+$stmt->execute([$uid, $entry_date, $project, $task, $hours, $note ?: null]);
     redirect('index.php');
   }
 }
@@ -73,7 +77,8 @@ if ($action === 'delete' && isset($_GET['id'])) {
   if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die("Invalid CSRF"); }
     $id = (int)($_GET['id'] ?? 0);
-    $pdo->prepare("DELETE FROM time_entries WHERE id=?")->execute([$id]);
+$st = $pdo->prepare("DELETE FROM time_entries WHERE id=? AND user_id=?");
+$st->execute([(int)($_GET['id'] ?? 0), $uid]);
     redirect('index.php');
   }
 }
@@ -97,8 +102,10 @@ if ($action === 'edit' && isset($_GET['id'])) {
     if ($task === '') { $errors['task'] = 'Required'; }
     if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['hours'] = '0 < hours ≤ 24'; }
     if (!$errors) {
-      $stmt = $pdo->prepare("UPDATE time_entries SET entry_date=?, project=?, task=?, hours=?, note=?, updated_at=NOW() WHERE id=?");
-      $stmt->execute([$entry_date, $project, $task, $hours, $note ?: null, $id]);
+$stmt = $pdo->prepare("UPDATE time_entries
+  SET entry_date=?, project=?, task=?, hours=?, note=?, updated_at=NOW()
+  WHERE id=? AND user_id=?");
+$stmt->execute([$entry_date, $project, $task, $hours, $note ?: null, $id, $uid]);
       redirect('index.php');
     } else {
        // Validatie faalde: vul het formulier opnieuw met de geposte waarden
@@ -106,26 +113,48 @@ if ($action === 'edit' && isset($_GET['id'])) {
     }
   } else {
         // GET: haal bestaande rij op om formulier te vullen
-    $st = $pdo->prepare("SELECT * FROM time_entries WHERE id=?");
-    $st->execute([$id]);
+      $st = $pdo->prepare("SELECT * FROM time_entries WHERE id=? AND user_id=?");
+      $st->execute([$id, $uid]);
+
     $editRow = $st->fetch();
     if (!$editRow) { http_response_code(404); die("Not found"); }
   }
 }
 // -------------------------------------------------------------
-// LIST — ophalen van rijen + eenvoudige filters en totalen
+// LIST — alleen eigen records + optionele datumfilters
 // -------------------------------------------------------------
 $from = $_GET['from'] ?? '';
-$to = $_GET['to'] ?? '';
-$where = []; $params = [];
+$to   = $_GET['to']   ?? '';
 
-// Optionele filter op datumbereik
-if ($from && DateTime::createFromFormat('Y-m-d', $from)) { $where[] = "entry_date >= ?"; $params[] = $from; }
-if ($to && DateTime::createFromFormat('Y-m-d', $to)) { $where[] = "entry_date <= ?"; $params[] = $to; }
-// Query opbouwen met filters
+$clauses = [];   // voorwaarden (WHERE-delen)
+$params  = [];   // prepared statement waarden
+
+// Altijd scopen op de ingelogde gebruiker
+$clauses[] = "user_id = ?";
+$params[]  = $uid;
+
+// Optionele datumfilters
+if ($from && DateTime::createFromFormat('Y-m-d', $from)) {
+  $clauses[] = "entry_date >= ?";
+  $params[]  = $from;
+}
+if ($to && DateTime::createFromFormat('Y-m-d', $to)) {
+  $clauses[] = "entry_date <= ?";
+  $params[]  = $to;
+}
+
+// SQL opbouwen (alleen WHERE toevoegen als er clauses zijn)
 $sql = "SELECT * FROM time_entries";
-if ($where) { $sql .= " WHERE " . implode(" AND ", $where); }
-sql:;
+if (!empty($clauses)) {
+  $sql .= " WHERE " . implode(" AND ", $clauses);
+}
+$sql .= " ORDER BY entry_date DESC, id DESC";
+
+// Uitvoeren
+$st = $pdo->prepare($sql);
+$st->execute($params);
+$rows = $st->fetchAll();
+
 $sql .= " ORDER BY entry_date DESC, id DESC"; // volgorde
 $rows = $pdo->prepare($sql); $rows->execute($params); $rows = $rows->fetchAll();
 
