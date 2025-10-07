@@ -21,17 +21,17 @@ function redirect($url){ header("Location: $url"); exit; }
 $errors = [];                 // per project-id of 'new' voor nieuw project
 $flash  = $_GET['ok'] ?? null;
 
-// =================== HANDLERS ===================
+/* =================== HANDLERS =================== */
 
-// Nieuw project (alleen naam)
+// Nieuw project — eigenaar vastleggen
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'create_project') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $name = trim($_POST['name'] ?? '');
   if ($name === '') { $errors['new']['name'] = 'Projectnaam is verplicht.'; }
   if (empty($errors['new'])) {
     try {
-      $ins = $pdo->prepare("INSERT INTO projects (name, is_active) VALUES (?, 1)");
-      $ins->execute([$name]);
+      $ins = $pdo->prepare("INSERT INTO projects (user_id, name, is_active) VALUES (?, ?, 1)");
+      $ins->execute([$uid, $name]);
       redirect('projects.php?ok=project');
     } catch (PDOException $e) {
       if ($e->getCode() === '23000') { $errors['new']['name'] = 'Projectnaam bestaat al.'; }
@@ -40,11 +40,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'create_
   }
 }
 
-// Uren snel toevoegen
+// Uren snel toevoegen (alleen op eigen project)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'quick_add') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
 
   $projectId  = (int)($_POST['project_id'] ?? 0);
+
+  // eigenaarscheck
+  $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
+  $own->execute([$projectId, $uid]);
+  if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan: project is niet van jou.'); }
+
   $entry_date = $_POST['entry_date'] ?? '';
   $task_id    = (int)($_POST['task_id'] ?? 0);
   $hours      = $_POST['hours'] ?? '';
@@ -69,26 +75,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'quick_a
   }
 }
 
-// Deactiveren
+// Deactiveren (alleen eigen project)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'deactivate_project') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $pid = (int)($_POST['project_id'] ?? 0);
+
+  $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
+  $own->execute([$pid, $uid]);
+  if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+
   $pdo->prepare("UPDATE projects SET is_active=0 WHERE id=?")->execute([$pid]);
   redirect('projects.php?ok=deactivated');
 }
 
-// Activeren
+// Activeren (alleen eigen project)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'activate_project') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $pid = (int)($_POST['project_id'] ?? 0);
+
+  $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
+  $own->execute([$pid, $uid]);
+  if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+
   $pdo->prepare("UPDATE projects SET is_active=1 WHERE id=?")->execute([$pid]);
   redirect('projects.php?ok=activated');
 }
 
-// Verwijderen (alleen als project inactief én geen uren bestaan)
+// Verwijderen (alleen eigen project; inactief; geen uren)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_project') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $pid = (int)($_POST['project_id'] ?? 0);
+
+  // eigenaarscheck
+  $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
+  $own->execute([$pid, $uid]);
+  if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan'); }
 
   // 1) Moet eerst inactief zijn
   $st = $pdo->prepare("SELECT is_active FROM projects WHERE id=?");
@@ -98,7 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_
   if ($isActive === 1) {
     $errors[$pid]['delete'] = 'Deactiveer dit project eerst voordat je het kunt verwijderen.';
   } else {
-    // 2) Mag alleen als er geen uren bestaan (FK’s beschermen je ook nog)
+    // 2) Mag alleen als er geen uren bestaan (voor iedereen)
     $st = $pdo->prepare("SELECT COUNT(*) FROM time_entries WHERE project_id=?");
     $st->execute([$pid]);
     $hasEntries = (int)$st->fetchColumn() > 0;
@@ -114,37 +135,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_
   }
 }
 
-
-// =================== DATA LADEN ===================
+/* =================== DATA LADEN =================== */
 
 // Filter: toon ook inactieve? (via ?show=all)
 $showAll = ($_GET['show'] ?? '') === 'all';
 
-$params = [];
-$where  = [];
-if (!$showAll) { $where[] = "p.is_active=1"; }
+// Alleen eigen projecten + eigen totalen
+$params = [$uid];
+$where  = ["p.user_id = ?"];
+if (!$showAll) { $where[] = "p.is_active = 1"; }
 
 $sql = "
-SELECT p.id, p.name, p.is_active, COALESCE(SUM(te.hours),0) AS total_hours
+SELECT p.id, p.name, p.is_active,
+       COALESCE(SUM(te.hours),0) AS total_hours
 FROM projects p
-LEFT JOIN time_entries te ON te.project_id = p.id AND te.user_id = ?
+LEFT JOIN time_entries te
+  ON te.project_id = p.id
+ AND te.user_id    = ?
 ";
 $params[] = $uid;
 
-if ($where) { $sql .= " WHERE " . implode(" AND ", $where); }
-$sql .= " GROUP BY p.id, p.name, p.is_active ORDER BY p.is_active DESC, p.name ASC";
+$sql .= " WHERE " . implode(" AND ", $where) . "
+          GROUP BY p.id, p.name, p.is_active
+          ORDER BY p.is_active DESC, p.name ASC";
 
 $st = $pdo->prepare($sql);
 $st->execute($params);
 $projects = $st->fetchAll();
 
-// Taken per project (voor dropdowns)
-$taskStmt = $pdo->query("
+// Taken per project (alleen voor jouw projecten)
+$taskStmt = $pdo->prepare("
 SELECT pt.id, pt.project_id, pt.name
 FROM project_tasks pt
+JOIN projects p ON p.id = pt.project_id
 WHERE pt.is_active = 1
+  AND p.user_id = ?
 ORDER BY pt.project_id, pt.name
 ");
+$taskStmt->execute([$uid]);
 $tasksByProject = [];
 foreach ($taskStmt as $row) {
   $tasksByProject[(int)$row['project_id']][] = $row;
@@ -178,15 +206,13 @@ foreach ($taskStmt as $row) {
     .badge.inactive{background:#fff7ed;border-color:#fdba74;color:#9a3412}
 
     .btn-danger.disabled{
-  background:#e5e7eb;       /* lichtgrijs */
-  color:#9ca3af;            /* grijze tekst */
-  border:1px dashed #d1d5db;
-  cursor:not-allowed;
-}
-.btn-danger .icon{ margin-right:6px; }
-
-
-
+      background:#e5e7eb;
+      color:#9ca3af;
+      border:1px dashed #d1d5db;
+      cursor:not-allowed;
+    }
+    .btn-danger .icon{ margin-right:6px; }
+    nav form { display:inline; margin:0; }
   </style>
 </head>
 <body>
@@ -195,150 +221,147 @@ foreach ($taskStmt as $row) {
   <nav class="muted">
     Ingelogd als <strong><?=h(currentUserEmail())?></strong>
     —
-    <form method="post" action="logout.php" style="display:inline">
+    <form method="post" action="logout.php">
       <input type="hidden" name="csrf" value="<?=h($csrf)?>">
       <button type="submit" class="btn-secondary">Uitloggen</button>
     </form>
   </nav>
 </header>
 
-
-  <?php if ($flash): ?>
-    <div class="ok">
-      <?php
-        echo [
-          'project'    => 'Project aangemaakt.',
-          'entry'      => 'Uren opgeslagen.',
-          'deactivated'=> 'Project gedeactiveerd.',
-          'activated'  => 'Project geactiveerd.',
-          'deleted'    => 'Project verwijderd.'
-        ][$flash] ?? 'OK';
-      ?>
-    </div>
-  <?php endif; ?>
-
-  <!-- Nieuw project (alleen naam) -->
-  <div class="card" style="margin-bottom:12px">
-    <h3 style="margin:0 0 8px">Nieuw project</h3>
-    <form method="post" action="projects.php">
-      <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-      <input type="hidden" name="mode" value="create_project">
-
-      <label>Projectnaam</label>
-      <input type="text" name="name" placeholder="Projectnaam" required>
-      <?php if(isset($errors['new']['name'])): ?><div class="error"><?=$errors['new']['name']?></div><?php endif; ?>
-
-      <button class="btn-primary" type="submit">Opslaan</button>
-    </form>
-<div class="muted" style="margin-top:6px">
-  <?php if ($showAll): ?>
-    <!-- Knop zet filter UIT (alleen actieve) -->
-    <form method="get" action="projects.php" style="display:inline">
-      <button type="submit" class="btn-secondary">Alleen actieve tonen</button>
-    </form>
-  <?php else: ?>
-    <!-- Knop zet filter AAN (ook inactieve) -->
-    <form method="get" action="projects.php" style="display:inline">
-      <input type="hidden" name="show" value="all">
-      <button type="submit" class="btn-secondary">Alle (incl. inactief) tonen </button>
-    </form>
-  <?php endif; ?>
-</div>
-
-
+<?php if ($flash): ?>
+  <div class="ok">
+    <?php
+      echo [
+        'project'    => 'Project aangemaakt.',
+        'entry'      => 'Uren opgeslagen.',
+        'deactivated'=> 'Project gedeactiveerd.',
+        'activated'  => 'Project geactiveerd.',
+        'deleted'    => 'Project verwijderd.'
+      ][$flash] ?? 'OK';
+    ?>
   </div>
-
-  <p class="muted">Klik een project voor taken/uren of voeg snel uren toe via het uitklapformulier.</p>
-
-  <div class="grid">
-    <?php foreach ($projects as $p): $pid=(int)$p['id']; $inactive = !$p['is_active']; ?>
-      <div class="card">
-        <h3 style="margin:0 0 8px">
-          <?=h($p['name'])?>
-          <?php if ($inactive): ?><span class="badge inactive">inactief</span><?php endif; ?>
-        </h3>
-
-        <div><strong>Totaal uren:</strong> <?=number_format((float)$p['total_hours'],2)?></div>
-
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-          <a class="btn" href="project.php?id=<?=$pid?>">Open project</a>
-
-          <?php if ($inactive): ?>
-            <form method="post" action="projects.php" onsubmit="return confirm('Project activeren?');">
-              <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-              <input type="hidden" name="mode" value="activate_project">
-              <input type="hidden" name="project_id" value="<?=$pid?>">
-              <button class="btn-secondary" type="submit">Activeer</button>
-            </form>
-          <?php else: ?>
-            <form method="post" action="projects.php" onsubmit="return confirm('Project deactiveren?');">
-              <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-              <input type="hidden" name="mode" value="deactivate_project">
-              <input type="hidden" name="project_id" value="<?=$pid?>">
-              <button class="btn-secondary" type="submit">Deactiveer</button>
-            </form>
-          <?php endif; ?>
-
-<?php if ($inactive): ?>
-  <!-- Project is INACTIEF: verwijderen toegestaan (mits geen uren) -->
-  <form method="post" action="projects.php" onsubmit="return confirm('Echt verwijderen? Dit kan alleen als er geen uren zijn.');">
-    <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-    <input type="hidden" name="mode" value="delete_project">
-    <input type="hidden" name="project_id" value="<?=$pid?>">
-    <button class="btn-danger" type="submit"><span class="icon">🗑️</span>Verwijder</button>
-  </form>
-<?php else: ?>
-  <!-- Project is ACTIEF: eerst deactiveren -->
-  <button class="btn-danger disabled" type="button" aria-disabled="true" title="Deactiveer eerst"><span class="icon">🔒</span>Verwijder</button>
 <?php endif; ?>
 
-        </div>
+<!-- Nieuw project -->
+<div class="card" style="margin-bottom:12px">
+  <h3 style="margin:0 0 8px">Nieuw project</h3>
+  <form method="post" action="projects.php">
+    <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+    <input type="hidden" name="mode" value="create_project">
 
-        <?php if(isset($errors[$pid]['delete'])): ?>
-          <div class="error" style="margin-top:8px"><?=h($errors[$pid]['delete'])?></div>
+    <label>Projectnaam</label>
+    <input type="text" name="name" placeholder="Projectnaam" required>
+    <?php if(isset($errors['new']['name'])): ?><div class="error"><?=$errors['new']['name']?></div><?php endif; ?>
+
+    <button class="btn-primary" type="submit">Opslaan</button>
+  </form>
+
+  <div class="muted" style="margin-top:6px">
+    <?php if ($showAll): ?>
+      <!-- Knop zet filter UIT (alleen actieve) -->
+      <form method="get" action="projects.php" style="display:inline">
+        <button type="submit" class="btn-secondary">Alleen actieve tonen</button>
+      </form>
+    <?php else: ?>
+      <!-- Knop zet filter AAN (ook inactieve) -->
+      <form method="get" action="projects.php" style="display:inline">
+        <input type="hidden" name="show" value="all">
+        <button type="submit" class="btn-secondary">Alle (incl. inactief) tonen</button>
+      </form>
+    <?php endif; ?>
+  </div>
+</div>
+
+<p class="muted">Klik een project voor taken/uren of voeg snel uren toe via het uitklapformulier.</p>
+
+<div class="grid">
+  <?php foreach ($projects as $p): $pid=(int)$p['id']; $inactive = !$p['is_active']; ?>
+    <div class="card">
+      <h3 style="margin:0 0 8px">
+        <?=h($p['name'])?>
+        <?php if ($inactive): ?><span class="badge inactive">inactief</span><?php endif; ?>
+      </h3>
+
+      <div><strong>Totaal uren:</strong> <?=number_format((float)$p['total_hours'],2)?></div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <a class="btn" href="project.php?id=<?=$pid?>">Open project</a>
+
+        <?php if ($inactive): ?>
+          <form method="post" action="projects.php" onsubmit="return confirm('Project activeren?');">
+            <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+            <input type="hidden" name="mode" value="activate_project">
+            <input type="hidden" name="project_id" value="<?=$pid?>">
+            <button class="btn-secondary" type="submit">Activeer</button>
+          </form>
+        <?php else: ?>
+          <form method="post" action="projects.php" onsubmit="return confirm('Project deactiveren?');">
+            <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+            <input type="hidden" name="mode" value="deactivate_project">
+            <input type="hidden" name="project_id" value="<?=$pid?>">
+            <button class="btn-secondary" type="submit">Deactiveer</button>
+          </form>
         <?php endif; ?>
 
-        <details>
-          <summary>Uren toevoegen</summary>
-          <?php if (empty($tasksByProject[$pid])): ?>
-            <p class="muted">Nog geen taken voor dit project. Ga naar de projectpagina om taken toe te voegen.</p>
-          <?php else: ?>
-          <form method="post" action="projects.php">
+        <?php if ($inactive): ?>
+          <!-- Project is INACTIEF: verwijderen toegestaan (mits geen uren) -->
+          <form method="post" action="projects.php" onsubmit="return confirm('Echt verwijderen? Dit kan alleen als er geen uren zijn.');">
             <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-            <input type="hidden" name="mode" value="quick_add">
+            <input type="hidden" name="mode" value="delete_project">
             <input type="hidden" name="project_id" value="<?=$pid?>">
-
-            <div class="row">
-              <div>
-                <label>Datum</label>
-                <input type="date" name="entry_date" required>
-                <?php if(isset($errors[$pid]['entry_date'])): ?><div class="error"><?=$errors[$pid]['entry_date']?></div><?php endif; ?>
-              </div>
-              <div>
-                <label>Uren</label>
-                <input type="number" step="0.25" min="0.25" max="24" name="hours" required>
-                <?php if(isset($errors[$pid]['hours'])): ?><div class="error"><?=$errors[$pid]['hours']?></div><?php endif; ?>
-              </div>
-            </div>
-
-            <label>Taak</label>
-            <select name="task_id" required>
-              <option value="">— kies een taak —</option>
-              <?php foreach ($tasksByProject[$pid] as $t): ?>
-                <option value="<?=$t['id']?>"><?=h($t['name'])?></option>
-              <?php endforeach; ?>
-            </select>
-            <?php if(isset($errors[$pid]['task_id'])): ?><div class="error"><?=$errors[$pid]['task_id']?></div><?php endif; ?>
-
-            <label>Notitie (optioneel)</label>
-            <textarea name="note" rows="2"></textarea>
-
-            <button class="btn-primary" type="submit">Opslaan</button>
+            <button class="btn-danger" type="submit"><span class="icon">🗑️</span>Verwijder</button>
           </form>
-          <?php endif; ?>
-        </details>
+        <?php else: ?>
+          <!-- Project is ACTIEF: eerst deactiveren -->
+          <button class="btn-danger disabled" type="button" aria-disabled="true" title="Deactiveer eerst"><span class="icon">🔒</span>Verwijder</button>
+        <?php endif; ?>
       </div>
-    <?php endforeach; ?>
-  </div>
+
+      <?php if(isset($errors[$pid]['delete'])): ?>
+        <div class="error" style="margin-top:8px"><?=h($errors[$pid]['delete'])?></div>
+      <?php endif; ?>
+
+      <details>
+        <summary>Uren toevoegen</summary>
+        <?php if (empty($tasksByProject[$pid])): ?>
+          <p class="muted">Nog geen taken voor dit project. Ga naar de projectpagina om taken toe te voegen.</p>
+        <?php else: ?>
+        <form method="post" action="projects.php">
+          <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+          <input type="hidden" name="mode" value="quick_add">
+          <input type="hidden" name="project_id" value="<?=$pid?>">
+
+          <div class="row">
+            <div>
+              <label>Datum</label>
+              <input type="date" name="entry_date" required>
+              <?php if(isset($errors[$pid]['entry_date'])): ?><div class="error"><?=$errors[$pid]['entry_date']?></div><?php endif; ?>
+            </div>
+            <div>
+              <label>Uren</label>
+              <input type="number" step="0.25" min="0.25" max="24" name="hours" required>
+              <?php if(isset($errors[$pid]['hours'])): ?><div class="error"><?=$errors[$pid]['hours']?></div><?php endif; ?>
+            </div>
+          </div>
+
+          <label>Taak</label>
+          <select name="task_id" required>
+            <option value="">— kies een taak —</option>
+            <?php foreach ($tasksByProject[$pid] as $t): ?>
+              <option value="<?=$t['id']?>"><?=h($t['name'])?></option>
+            <?php endforeach; ?>
+          </select>
+          <?php if(isset($errors[$pid]['task_id'])): ?><div class="error"><?=$errors[$pid]['task_id']?></div><?php endif; ?>
+
+          <label>Notitie (optioneel)</label>
+          <textarea name="note" rows="2"></textarea>
+
+          <button class="btn-primary" type="submit">Opslaan</button>
+        </form>
+        <?php endif; ?>
+      </details>
+    </div>
+  <?php endforeach; ?>
+</div>
 </body>
 </html>
