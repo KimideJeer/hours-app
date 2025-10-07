@@ -190,13 +190,18 @@ foreach ($taskStmt as $row) {
   </style>
 </head>
 <body>
-  <header>
-    <h1>Projecten</h1>
-    <nav class="muted">
-      Ingelogd als <strong><?=h(currentUserEmail())?></strong>
-      — <a href="logout.php">Uitloggen</a>
-    </nav>
-  </header>
+<header>
+  <h1>Projecten</h1>
+  <nav class="muted">
+    Ingelogd als <strong><?=h(currentUserEmail())?></strong>
+    —
+    <form method="post" action="logout.php" style="display:inline">
+      <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+      <button type="submit" class="btn-secondary">Uitloggen</button>
+    </form>
+  </nav>
+</header>
+
 
   <?php if ($flash): ?>
     <div class="ok">
