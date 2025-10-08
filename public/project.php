@@ -42,6 +42,22 @@ if (!$project) {
 // HANDLERS (alleen eigenaar komt hier, want pagina is al gescoped)
 // -------------------------------------------------------------
 
+// 0) Project hernoemen
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'rename_project')) {
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+  $newName = trim($_POST['project_name'] ?? '');
+  if ($newName === '') { $errors['project_name'] = 'Projectnaam is verplicht.'; }
+  if (!$errors) {
+    try {
+      $pdo->prepare("UPDATE projects SET name=? WHERE id=? AND user_id=?")->execute([$newName, $projectId, $uid]);
+      redirect("project.php?id={$projectId}&ok=project_renamed");
+    } catch (PDOException $e) {
+      if ($e->getCode() === '23000') { $errors['project_name'] = 'Deze projectnaam bestaat al.'; }
+      else { throw $e; }
+    }
+  }
+}
+
 // 1) Taak aanmaken
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'create_task') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
@@ -53,8 +69,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'create_
       $ins->execute([$projectId, $taskName]);
       redirect("project.php?id={$projectId}&ok=task_created");
     } catch (PDOException $e) {
-      // unieke taak per project (uq_task_per_project) kan 23000 geven
       if ($e->getCode() === '23000') { $errors['task_new'] = 'Deze taak bestaat al in dit project.'; }
+      else { throw $e; }
+    }
+  }
+}
+
+// 1b) Taak hernoemen (gebruikt door het bewerk-paneel)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'rename_task')) {
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+  $taskId   = (int)($_POST['task_id'] ?? 0);
+  $taskName = trim($_POST['task_name'] ?? '');
+  if ($taskName === '') { $errors["task_{$taskId}_rename"] = 'Taaknaam is verplicht.'; }
+
+  $chk = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=?");
+  $chk->execute([$taskId, $projectId]);
+  if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+
+  if (empty($errors["task_{$taskId}_rename"])) {
+    try {
+      $pdo->prepare("UPDATE project_tasks SET name=? WHERE id=?")->execute([$taskName, $taskId]);
+      redirect("project.php?id={$projectId}&ok=task_renamed");
+    } catch (PDOException $e) {
+      if ($e->getCode() === '23000') { $errors["task_{$taskId}_rename"] = 'Deze taaknaam bestaat al in dit project.'; }
       else { throw $e; }
     }
   }
@@ -65,7 +102,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['mode'] ?? ''), ['
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $taskId = (int)($_POST['task_id'] ?? 0);
 
-  // eigenaarscheck via project_id
   $chk = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=?");
   $chk->execute([$taskId, $projectId]);
   if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
@@ -81,12 +117,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $taskId = (int)($_POST['task_id'] ?? 0);
 
-  // eigenaarscheck
   $chk = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=?");
   $chk->execute([$taskId, $projectId]);
   if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
 
-  // mag alleen als er geen entries zijn (ongeacht user; veiligste)
   $st = $pdo->prepare("SELECT COUNT(*) FROM time_entries WHERE project_id=? AND task_id=?");
   $st->execute([$projectId, $taskId]);
   if ((int)$st->fetchColumn() > 0) {
@@ -97,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_
   }
 }
 
-// 4) Uren toevoegen op dit project (alleen jouw user)
+// 4) Uren toevoegen (alleen jouw user)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'add_time') {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
 
@@ -110,7 +144,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'add_tim
   if ($task_id <= 0) { $errors['task_id'] = 'Kies een taak.'; }
   if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['hours'] = '0 < uren ≤ 24.'; }
 
-  // taak moet bij dit project horen en actief zijn
   if ($task_id > 0) {
     $chk = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=? AND is_active=1");
     $chk->execute([$task_id, $projectId]);
@@ -123,6 +156,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'add_tim
     $ins->execute([$uid, $projectId, $task_id, $entry_date, $hours, $note ?: null]);
     redirect("project.php?id={$projectId}&ok=entry_added");
   }
+}
+
+// 5) Urenregel verwijderen (alleen je eigen regel)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'delete_entry')) {
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+  $entryId = (int)($_POST['entry_id'] ?? 0);
+  $chk = $pdo->prepare("SELECT 1 FROM time_entries WHERE id=? AND user_id=? AND project_id=?");
+  $chk->execute([$entryId, $uid, $projectId]);
+  if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+  $pdo->prepare("DELETE FROM time_entries WHERE id=?")->execute([$entryId]);
+  redirect("project.php?id={$projectId}&ok=entry_deleted");
+}
+
+// 6) Edit-mode voor urenregel (GET) + update (POST)
+$editEntryId = (int)($_GET['edit_entry'] ?? 0);
+$editEntry = null;
+if ($editEntryId > 0) {
+  $st = $pdo->prepare("
+    SELECT te.id, te.entry_date, te.hours, te.note, te.task_id
+    FROM time_entries te
+    WHERE te.id=? AND te.user_id=? AND te.project_id=?");
+  $st->execute([$editEntryId, $uid, $projectId]);
+  $editEntry = $st->fetch();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'update_entry')) {
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+
+  $entryId    = (int)($_POST['entry_id'] ?? 0);
+  $entry_date = $_POST['entry_date'] ?? '';
+  $task_id    = (int)($_POST['task_id'] ?? 0);
+  $hours      = $_POST['hours'] ?? '';
+  $note       = trim($_POST['note'] ?? '');
+
+  $chk = $pdo->prepare("SELECT 1 FROM time_entries WHERE id=? AND user_id=? AND project_id=?");
+  $chk->execute([$entryId, $uid, $projectId]);
+  if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+
+  if (!$entry_date || !DateTime::createFromFormat('Y-m-d', $entry_date)) { $errors['edit_entry_date'] = 'Datum (YYYY-MM-DD)'; }
+  if ($task_id <= 0) { $errors['edit_task_id'] = 'Kies een taak.'; }
+  if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['edit_hours'] = '0 < uren ≤ 24.'; }
+
+  if ($task_id > 0) {
+    $chk2 = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=?");
+    $chk2->execute([$task_id, $projectId]);
+    if (!$chk2->fetch()) { $errors['edit_task_id'] = 'Ongeldige taak voor dit project.'; }
+  }
+
+  if (!$errors) {
+    $upd = $pdo->prepare("
+      UPDATE time_entries
+      SET entry_date=?, task_id=?, hours=?, note=?, updated_at=NOW()
+      WHERE id=? AND user_id=? AND project_id=?");
+    $upd->execute([$entry_date, $task_id, $hours, $note ?: null, $entryId, $uid, $projectId]);
+    redirect("project.php?id={$projectId}&ok=entry_updated");
+  } else {
+    $editEntry = [
+      'id' => $entryId,
+      'entry_date' => $entry_date,
+      'task_id' => $task_id,
+      'hours' => $hours,
+      'note' => $note,
+    ];
+  }
+}
+
+// -------------------------------------------------------------
+// EDIT-MODES voor project & taak (zoals bij Uren)
+// -------------------------------------------------------------
+$editProject = isset($_GET['edit_project']);           // ?edit_project=1
+$editTaskId  = (int)($_GET['edit_task'] ?? 0);         // ?edit_task=ID
+$editTask    = null;
+if ($editTaskId > 0) {
+  $st = $pdo->prepare("SELECT id, name FROM project_tasks WHERE id=? AND project_id=?");
+  $st->execute([$editTaskId, $projectId]);
+  $editTask = $st->fetch();
 }
 
 // -------------------------------------------------------------
@@ -191,9 +300,14 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
 <body>
   <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div>
-      <h1><?=h($project['name'])?></h1>
+      <h1 style="margin-bottom:6px"><?=h($project['name'])?></h1>
       <?php if ((int)$project['is_active'] === 0): ?><span class="badge inactive">inactief</span><?php endif; ?>
-      <div class="muted">Totaal uren (jij): <strong><?=number_format($totalHours,2)?></strong></div>
+      <div class="muted">Totaal uren: <strong><?=number_format($totalHours,2)?></strong></div>
+
+      <!-- Actie: project bewerken via edit-mode -->
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_project=1">Bewerk</a>
+      </div>
     </div>
     <nav class="muted">
       Ingelogd als <strong><?=h(currentUserEmail())?></strong>
@@ -208,11 +322,37 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
   <?php if ($flash): ?>
     <div class="ok">
       <?= [
-        'task_created' => 'Taak toegevoegd.',
-        'task_state'   => 'Taakstatus aangepast.',
-        'task_deleted' => 'Taak verwijderd.',
-        'entry_added'  => 'Uren toegevoegd.'
+        'project_renamed'=> 'Projectnaam aangepast.',
+        'task_created'   => 'Taak toegevoegd.',
+        'task_state'     => 'Taakstatus aangepast.',
+        'task_deleted'   => 'Taak verwijderd.',
+        'task_renamed'   => 'Taaknaam aangepast.',
+        'entry_added'    => 'Uren toegevoegd.',
+        'entry_deleted'  => 'Urenregel verwijderd.',
+        'entry_updated'  => 'Urenregel bijgewerkt.',
       ][$flash] ?? 'OK'; ?>
+    </div>
+  <?php endif; ?>
+
+  <!-- Project bewerken (paneel) -->
+  <?php if ($editProject): ?>
+    <div class="card">
+      <h3>Project bewerken</h3>
+      <form method="post" action="project.php?id=<?=$projectId?>">
+        <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+        <input type="hidden" name="mode" value="rename_project">
+
+        <label>Projectnaam</label>
+        <input type="text" name="project_name" value="<?=h($project['name'])?>" required>
+        <?php if(isset($errors['project_name'])): ?>
+          <div class="muted" style="color:#b91c1c"><?=$errors['project_name']?></div>
+        <?php endif; ?>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" type="submit">Opslaan</button>
+          <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>">Annuleren</a>
+        </div>
+      </form>
     </div>
   <?php endif; ?>
 
@@ -238,7 +378,7 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
       <p class="muted">Nog geen taken. Voeg er hierboven één toe.</p>
     <?php else: ?>
       <table>
-        <thead><tr><th>Taak</th><th>Status</th><th>Totaal uren (jij)</th><th>Acties</th></tr></thead>
+        <thead><tr><th>Taak</th><th>Status</th><th>Totaal uren: </th><th>Acties</th></tr></thead>
         <tbody>
           <?php foreach ($tasks as $t): $tid=(int)$t['id']; $inactive = !$t['is_active']; ?>
             <tr>
@@ -254,7 +394,6 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
                     <button class="btn btn-secondary" type="submit">Activeer</button>
                   </form>
 
-                  <!-- Verwijderen mag alleen als er geen uren zijn (server checkt ook) -->
                   <form method="post" action="project.php?id=<?=$projectId?>" onsubmit="return confirm('Echt verwijderen? Dit kan alleen als er geen uren zijn.');">
                     <input type="hidden" name="csrf" value="<?=h($csrf)?>">
                     <input type="hidden" name="mode" value="delete_task">
@@ -268,10 +407,11 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
                     <input type="hidden" name="task_id" value="<?=$tid?>">
                     <button class="btn btn-secondary" type="submit">Deactiveer</button>
                   </form>
-
-                  <!-- Zichtbare maar uitgeschakelde delete -->
                   <button class="btn btn-danger disabled" type="button" title="Deactiveer eerst">Verwijder</button>
                 <?php endif; ?>
+
+                <!-- Taak bewerken via edit-mode -->
+                <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_task=<?=$tid?>">Bewerk</a>
 
                 <?php if(isset($errors["task_{$tid}_delete"])): ?>
                   <div class="muted" style="color:#b91c1c"><?=$errors["task_{$tid}_delete"]?></div>
@@ -324,6 +464,71 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
     <?php endif; ?>
   </div>
 
+  <!-- Uren bewerken (indien in edit-mode) -->
+  <?php if ($editEntry): ?>
+    <div class="card">
+      <h3>Uren bewerken</h3>
+      <form method="post" action="project.php?id=<?=$projectId?>">
+        <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+        <input type="hidden" name="mode" value="update_entry">
+        <input type="hidden" name="entry_id" value="<?=h($editEntry['id'])?>">
+
+        <div class="grid">
+          <div>
+            <label>Datum</label>
+            <input type="date" name="entry_date" value="<?=h($editEntry['entry_date'])?>" required>
+            <?php if(isset($errors['edit_entry_date'])): ?><div class="muted" style="color:#b91c1c"><?=$errors['edit_entry_date']?></div><?php endif; ?>
+          </div>
+          <div>
+            <label>Uren</label>
+            <input type="number" step="0.25" min="0.25" max="24" name="hours" value="<?=h($editEntry['hours'])?>" required>
+            <?php if(isset($errors['edit_hours'])): ?><div class="muted" style="color:#b91c1c"><?=$errors['edit_hours']?></div><?php endif; ?>
+          </div>
+        </div>
+
+        <label>Taak</label>
+        <select name="task_id" required>
+          <option value="">— kies een taak —</option>
+          <?php foreach ($tasks as $t): ?>
+            <option value="<?=$t['id']?>" <?=$t['id']==$editEntry['task_id']?'selected':''?>><?=h($t['name'])?><?=$t['is_active']?'':' (inactief)'?></option>
+          <?php endforeach; ?>
+        </select>
+        <?php if(isset($errors['edit_task_id'])): ?><div class="muted" style="color:#b91c1c"><?=$errors['edit_task_id']?></div><?php endif; ?>
+
+        <label>Notitie (optioneel)</label>
+        <textarea name="note" rows="2"><?=h($editEntry['note'])?></textarea>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" type="submit">Opslaan</button>
+          <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>">Annuleren</a>
+        </div>
+      </form>
+    </div>
+  <?php endif; ?>
+
+  <!-- Taak bewerken (indien in edit-mode) -->
+  <?php if ($editTask): ?>
+    <div class="card">
+      <h3>Taak bewerken</h3>
+      <form method="post" action="project.php?id=<?=$projectId?>">
+        <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+        <input type="hidden" name="mode" value="rename_task">
+        <input type="hidden" name="task_id" value="<?=h($editTask['id'])?>">
+
+        <label>Taaknaam</label>
+        <input type="text" name="task_name" value="<?=h($editTask['name'])?>" required>
+        <?php if(isset($errors["task_{$editTaskId}_rename"])): ?>
+          <div class="muted" style="color:#b91c1c"><?=$errors["task_{$editTaskId}_rename"]?></div>
+        <?php endif; ?>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" type="submit">Opslaan</button>
+          <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>">Annuleren</a>
+        </div>
+      </form>
+    </div>
+  <?php endif; ?>
+
   <!-- Urenoverzicht (jouw regels) -->
   <div class="card">
     <h3>Urenoverzicht</h3>
@@ -333,7 +538,7 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
       <table>
         <thead>
           <tr>
-            <th>Datum</th><th>Taak</th><th>Uren</th><th>Notitie</th>
+            <th>Datum</th><th>Taak</th><th>Uren</th><th>Notitie</th><th>Acties</th>
           </tr>
         </thead>
         <tbody>
@@ -343,6 +548,15 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
               <td><?=h($e['task_name'] ?? '—')?></td>
               <td><?=h($e['hours'])?></td>
               <td><?=nl2br(h($e['note']))?></td>
+              <td style="white-space:nowrap">
+                <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_entry=<?=$e['id']?>">Bewerk</a>
+                <form method="post" action="project.php?id=<?=$projectId?>" style="display:inline" onsubmit="return confirm('Urenregel verwijderen?');">
+                  <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+                  <input type="hidden" name="mode" value="delete_entry">
+                  <input type="hidden" name="entry_id" value="<?=$e['id']?>">
+                  <button class="btn btn-danger" type="submit">Verwijder</button>
+                </form>
+              </td>
             </tr>
           <?php endforeach; ?>
         </tbody>
