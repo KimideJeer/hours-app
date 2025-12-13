@@ -6,9 +6,12 @@ $csrf = $_SESSION['csrf'];
 
 require __DIR__ . '/../src/auth.php';
 requireLogin('login.php');
-$uid = currentUserId();
+$uid  = currentUserId();
+$role = currentUserRole();
+$isManager = in_array($role, ['manager', 'admin'], true);
 
 $config = require __DIR__ . '/../config.php';
+
 $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4', $config['host'], $config['port'], $config['dbname']);
 $pdo = new PDO($dsn, $config['user'], $config['pass'], [
   PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -46,10 +49,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'quick_a
 
   $projectId  = (int)($_POST['project_id'] ?? 0);
 
-  // eigenaarscheck
-  $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
-  $own->execute([$projectId, $uid]);
-  if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan: project is niet van jou.'); }
+  // eigenaarscheck: medewerker alleen eigen project, manager/admin alles
+  if (!$isManager) {
+    $own = $pdo->prepare("SELECT 1 FROM projects WHERE id=? AND user_id=?");
+    $own->execute([$projectId, $uid]);
+    if (!$own->fetch()) { http_response_code(403); die('Niet toegestaan: project is niet van jou.'); }
+  }
+
 
   $entry_date = $_POST['entry_date'] ?? '';
   $task_id    = (int)($_POST['task_id'] ?? 0);
@@ -140,39 +146,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'delete_
 // Filter: toon ook inactieve? (via ?show=all)
 $showAll = ($_GET['show'] ?? '') === 'all';
 
-// Alleen eigen projecten + eigen totalen
-$params = [$uid];
-$where  = ["p.user_id = ?"];
-if (!$showAll) { $where[] = "p.is_active = 1"; }
+$params = [];
+$where  = [];
 
-$sql = "
-SELECT p.id, p.name, p.is_active,
-       COALESCE(SUM(te.hours),0) AS total_hours
-FROM projects p
-LEFT JOIN time_entries te
-  ON te.project_id = p.id
- AND te.user_id    = ?
+// Manager/admin ziet alle projecten + alle uren
+// Manager/admin ziet alle projecten + alle uren
+if ($isManager) {
+    if (!$showAll) {
+        $where[] = "p.is_active = 1";
+    }
+
+    $sql = "
+    SELECT p.id, p.name, p.is_active,
+           COALESCE(SUM(te.hours),0) AS total_hours
+    FROM projects p
+    LEFT JOIN time_entries te
+      ON te.project_id = p.id
+    ";
+} else {
+    // Medewerker: alleen eigen projecten + eigen uren
+    $sql = "
+    SELECT p.id, p.name, p.is_active,
+           COALESCE(SUM(te.hours),0) AS total_hours
+    FROM projects p
+    LEFT JOIN time_entries te
+      ON te.project_id = p.id
+     AND te.user_id    = ?
+    ";
+
+    // WHERE-deel: p.user_id = ? + eventueel is_active
+    $where[] = "p.user_id = ?";
+    if (!$showAll) {
+        $where[] = "p.is_active = 1";
+    }
+
+    // ⚠️ heel belangrijk: twee keer $uid, voor de twee vraagtekens
+    $params = [$uid, $uid];
+}
+
+if ($where) {
+    $sql .= " WHERE " . implode(" AND ", $where);
+}
+
+$sql .= "
+  GROUP BY p.id, p.name, p.is_active
+  ORDER BY p.is_active DESC, p.name ASC
 ";
-$params[] = $uid;
-
-$sql .= " WHERE " . implode(" AND ", $where) . "
-          GROUP BY p.id, p.name, p.is_active
-          ORDER BY p.is_active DESC, p.name ASC";
 
 $st = $pdo->prepare($sql);
 $st->execute($params);
 $projects = $st->fetchAll();
 
-// Taken per project (alleen voor jouw projecten)
-$taskStmt = $pdo->prepare("
-SELECT pt.id, pt.project_id, pt.name
-FROM project_tasks pt
-JOIN projects p ON p.id = pt.project_id
-WHERE pt.is_active = 1
-  AND p.user_id = ?
-ORDER BY pt.project_id, pt.name
-");
-$taskStmt->execute([$uid]);
+// Taken per project
+if ($isManager) {
+  // Manager/admin: alle taken van alle projecten
+  $taskStmt = $pdo->query("
+    SELECT pt.id, pt.project_id, pt.name, pt.is_active
+    FROM project_tasks pt
+    WHERE pt.is_active = 1
+    ORDER BY pt.project_id, pt.name
+  ");
+} else {
+  // Medewerker: alleen taken van eigen projecten
+  $taskStmt = $pdo->prepare("
+    SELECT pt.id, pt.project_id, pt.name, pt.is_active
+    FROM project_tasks pt
+    JOIN projects p ON p.id = pt.project_id
+    WHERE pt.is_active = 1
+      AND p.user_id = ?
+    ORDER BY pt.project_id, pt.name
+  ");
+  $taskStmt->execute([$uid]);
+}
+
 $tasksByProject = [];
 foreach ($taskStmt as $row) {
   $tasksByProject[(int)$row['project_id']][] = $row;

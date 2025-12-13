@@ -6,9 +6,12 @@ $csrf = $_SESSION['csrf'];
 
 require __DIR__ . '/../src/auth.php';
 requireLogin('login.php');
-$uid = currentUserId();
+$uid  = currentUserId();
+$role = currentUserRole();
+$isManager = in_array($role, ['manager', 'admin'], true);
 
 $config = require __DIR__ . '/../config.php';
+
 $dsn = sprintf('mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4', $config['host'], $config['port'], $config['dbname']);
 $pdo = new PDO($dsn, $config['user'], $config['pass'], [
   PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -27,16 +30,23 @@ if ($projectId <= 0) { http_response_code(400); die('Ongeldig project-id'); }
 $errors = [];
 $flash  = $_GET['ok'] ?? null;
 
-// -------------------------------------------------------------
-// Toegang: project moet van ingelogde gebruiker zijn
-// -------------------------------------------------------------
-$st = $pdo->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
-$st->execute([$projectId, $uid]);
+
+// Toegang:
+// - medewerker: alleen eigen project
+// - manager/admin: elk project
+if ($isManager) {
+  $st = $pdo->prepare("SELECT * FROM projects WHERE id = ?");
+  $st->execute([$projectId]);
+} else {
+  $st = $pdo->prepare("SELECT * FROM projects WHERE id = ? AND user_id = ?");
+  $st->execute([$projectId, $uid]);
+}
 $project = $st->fetch();
 if (!$project) {
   http_response_code(403);
   die('Niet toegestaan / project niet gevonden');
 }
+
 
 // -------------------------------------------------------------
 // HANDLERS (alleen eigenaar komt hier, want pagina is al gescoped)
@@ -254,21 +264,43 @@ $st = $pdo->prepare($sql);
 $st->execute([$uid, $projectId]);
 $tasks = $st->fetchAll();
 
-// 2) Urenlijst (alleen jouw entries)
-$sql = "
-SELECT te.id, te.entry_date, te.hours, te.note,
-       pt.name AS task_name
-FROM time_entries te
-LEFT JOIN project_tasks pt ON pt.id = te.task_id
-WHERE te.user_id = ? AND te.project_id = ?
-ORDER BY te.entry_date DESC, te.id DESC
-";
-$st = $pdo->prepare($sql);
-$st->execute([$uid, $projectId]);
+// 2) Urenlijst 
+if ($isManager) {
+  // Manager/admin: alle uren binnen dit project
+  $sql = "
+  SELECT te.id, te.entry_date, te.hours, te.note,
+         pt.name AS task_name,
+         u.email AS user_email
+  FROM time_entries te
+  LEFT JOIN project_tasks pt ON pt.id = te.task_id
+  LEFT JOIN users u ON u.id = te.user_id
+  WHERE te.project_id = ?
+  ORDER BY te.entry_date DESC, te.id DESC
+  ";
+  $st = $pdo->prepare($sql);
+  $st->execute([$projectId]);
+} else {
+  // Medewerker: alleen eigen uren binnen dit project
+  $sql = "
+  SELECT te.id, te.entry_date, te.hours, te.note,
+         pt.name AS task_name,
+         u.email AS user_email
+  FROM time_entries te
+  LEFT JOIN project_tasks pt ON pt.id = te.task_id
+  LEFT JOIN users u ON u.id = te.user_id
+  WHERE te.user_id = ? AND te.project_id = ?
+  ORDER BY te.entry_date DESC, te.id DESC
+  ";
+  $st = $pdo->prepare($sql);
+  $st->execute([$uid, $projectId]);
+}
 $entries = $st->fetchAll();
 
-// Totaal uren (alleen jouw uren binnen dit project)
-$totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours']; }
+// Totaal uren (alle regels die getoond worden)
+$totalHours = 0.0;
+foreach ($entries as $e) {
+  $totalHours += (float)$e['hours'];
+}
 
 ?>
 <!doctype html>
@@ -535,20 +567,30 @@ $totalHours = 0.0; foreach ($entries as $e) { $totalHours += (float)$e['hours'];
     <?php if (!$entries): ?>
       <p class="muted">Nog geen uren geboekt op dit project.</p>
     <?php else: ?>
-      <table>
-        <thead>
+          <table>
+      <thead>
+        <tr>
+          <th>Datum</th>
+          <th>Taak</th>
+          <th>Uren</th>
+          <?php if ($isManager): ?>
+            <th>Gebruiker</th>
+          <?php endif; ?>
+          <th>Notitie</th>
+          <th>Acties</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($entries as $e): ?>
           <tr>
-            <th>Datum</th><th>Taak</th><th>Uren</th><th>Notitie</th><th>Acties</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($entries as $e): ?>
-            <tr>
-              <td><?=h($e['entry_date'])?></td>
-              <td><?=h($e['task_name'] ?? '—')?></td>
-              <td><?=h($e['hours'])?></td>
-              <td><?=nl2br(h($e['note']))?></td>
-              <td style="white-space:nowrap">
+            <td><?=h($e['entry_date'])?></td>
+            <td><?=h($e['task_name'] ?? '—')?></td>
+            <td><?=h($e['hours'])?></td>
+            <?php if ($isManager): ?>
+              <td><?=h($e['user_email'] ?? '')?></td>
+            <?php endif; ?>
+            <td><?=nl2br(h($e['note']))?></td>
+            <td style="white-space:nowrap">
                 <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_entry=<?=$e['id']?>">Bewerk</a>
                 <form method="post" action="project.php?id=<?=$projectId?>" style="display:inline" onsubmit="return confirm('Urenregel verwijderen?');">
                   <input type="hidden" name="csrf" value="<?=h($csrf)?>">

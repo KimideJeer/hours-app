@@ -55,3 +55,20 @@ function requireLogin(string $loginPath = 'login.php'): void {
         exit;
     }
 }
+
+/** Redirect als je niet de juiste rol(len) hebt. */
+function requireRole(array $allowedRoles, string $loginPath = 'login.php'): void {
+    // Eerst checken of iemand überhaupt ingelogd is
+    if (!isLoggedIn()) {
+        header("Location: {$loginPath}");
+        exit;
+    }
+
+    // Daarna checken of de rol mag
+    if (!in_array(currentUserRole(), $allowedRoles, true)) {
+        http_response_code(403);
+        echo 'Je hebt geen toegang tot deze pagina.';
+        exit;
+    }
+}
+
