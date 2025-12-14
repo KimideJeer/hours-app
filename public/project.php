@@ -207,7 +207,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'set_en
   $upd = $pdo->prepare("UPDATE time_entries SET status=?, updated_at=NOW() WHERE id=?");
   $upd->execute([$status, $entryId]);
 
-  redirect("project.php?id={$projectId}&ok=status_updated");
+  if ($status === 'approved') {
+    $ok = 'entry_approved';
+} elseif ($status === 'rejected') {
+    $ok = 'entry_rejected';
+} else {
+    $ok = 'status_updated';
+}
+
+redirect("project.php?id={$projectId}&ok={$ok}");
+
 }
 
 
@@ -280,20 +289,40 @@ if ($editTaskId > 0) {
 // DATA LADEN
 // -------------------------------------------------------------
 
-// 1) Project taken + jouw totalen per taak
-$sql = "
-SELECT t.id, t.name, t.is_active,
-       COALESCE(SUM(te.hours),0) AS total_hours
-FROM project_tasks t
-LEFT JOIN time_entries te
-  ON te.task_id = t.id
- AND te.user_id = ?
-WHERE t.project_id = ?
-GROUP BY t.id, t.name, t.is_active
-ORDER BY t.name ASC
-";
-$st = $pdo->prepare($sql);
-$st->execute([$uid, $projectId]);
+// 1) Project taken + totalen per taak
+if ($isManager) {
+  // Manager/admin: alle goedgekeurde uren binnen dit project
+  $sql = "
+  SELECT t.id, t.name, t.is_active,
+         COALESCE(SUM(te.hours),0) AS total_hours
+  FROM project_tasks t
+  LEFT JOIN time_entries te
+    ON te.task_id   = t.id
+   AND te.project_id = ?
+   AND te.status    = 'approved'
+  WHERE t.project_id = ?
+  GROUP BY t.id, t.name, t.is_active
+  ORDER BY t.name ASC
+  ";
+  $st = $pdo->prepare($sql);
+  $st->execute([$projectId, $projectId]);
+} else {
+  // Medewerker: alleen eigen goedgekeurde uren tellen mee
+  $sql = "
+  SELECT t.id, t.name, t.is_active,
+         COALESCE(SUM(te.hours),0) AS total_hours
+  FROM project_tasks t
+  LEFT JOIN time_entries te
+    ON te.task_id = t.id
+   AND te.user_id = ?
+   AND te.status  = 'approved'
+  WHERE t.project_id = ?
+  GROUP BY t.id, t.name, t.is_active
+  ORDER BY t.name ASC
+  ";
+  $st = $pdo->prepare($sql);
+  $st->execute([$uid, $projectId]);
+}
 $tasks = $st->fetchAll();
 
 // 2) Urenlijst
@@ -338,15 +367,34 @@ if ($isManager) {
 }
 $entries = $st->fetchAll();
 
-// Totaal uren (alle regels die getoond worden)
-$totalHours = 0.0;
-foreach ($entries as $e) {
-  $totalHours += (float)$e['hours'];
+// Totaal uren opnieuw berekenen via SQL,
+// zodat het altijd overeenkomt met de definitie:
+// - alleen 'approved' uren
+// - manager: alle users, medewerker: alleen eigen user
+if ($isManager) {
+    $sumStmt = $pdo->prepare("
+        SELECT COALESCE(SUM(hours), 0) AS total
+        FROM time_entries
+        WHERE project_id = ?
+          AND status = 'approved'
+    ");
+    $sumStmt->execute([$projectId]);
+} else {
+    $sumStmt = $pdo->prepare("
+        SELECT COALESCE(SUM(hours), 0) AS total
+        FROM time_entries
+        WHERE project_id = ?
+          AND user_id = ?
+          AND status = 'approved'
+    ");
+    $sumStmt->execute([$projectId, $uid]);
 }
 
-foreach ($entries as $e) {
-  $totalHours += (float)$e['hours'];
-}
+$totalHours = (float)$sumStmt->fetchColumn();
+
+
+
+  
 
 ?>
 <!doctype html>
@@ -398,19 +446,23 @@ foreach ($entries as $e) {
   </header>
 
   <?php if ($flash): ?>
-    <div class="ok">
-      <?= [
-        'project_renamed'=> 'Projectnaam aangepast.',
-        'task_created'   => 'Taak toegevoegd.',
-        'task_state'     => 'Taakstatus aangepast.',
-        'task_deleted'   => 'Taak verwijderd.',
-        'task_renamed'   => 'Taaknaam aangepast.',
-        'entry_added'    => 'Uren toegevoegd.',
-        'entry_deleted'  => 'Urenregel verwijderd.',
-        'entry_updated'  => 'Urenregel bijgewerkt.',
-      ][$flash] ?? 'OK'; ?>
-    </div>
-  <?php endif; ?>
+  <div class="ok">
+    <?= [
+      'project_renamed'=> 'Projectnaam aangepast.',
+      'task_created'   => 'Taak toegevoegd.',
+      'task_state'     => 'Taakstatus aangepast.',
+      'task_deleted'   => 'Taak verwijderd.',
+      'task_renamed'   => 'Taaknaam aangepast.',
+      'entry_added'    => 'Uren toegevoegd.',
+      'entry_deleted'  => 'Urenregel verwijderd.',
+      'entry_updated'  => 'Urenregel bijgewerkt.',
+      'entry_approved' => 'De uren zijn goedgekeurd.',
+      'entry_rejected' => 'De uren zijn afgewezen.',
+      'status_updated' => 'De status van de uren is bijgewerkt.',
+    ][$flash] ?? 'OK'; ?>
+  </div>
+<?php endif; ?>
+
 
   <!-- Project bewerken (paneel) -->
   <?php if ($editProject): ?>
