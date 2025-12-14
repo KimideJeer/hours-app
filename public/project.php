@@ -179,6 +179,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'delete
   redirect("project.php?id={$projectId}&ok=entry_deleted");
 }
 
+// 5b) Status van urenregel aanpassen (alleen manager/admin)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'set_entry_status')) {
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+
+  if (!$isManager) {
+    http_response_code(403);
+    die('Niet toegestaan');
+  }
+
+  $entryId = (int)($_POST['entry_id'] ?? 0);
+  $status  = $_POST['status'] ?? 'pending';
+
+  if (!in_array($status, ['pending','approved','rejected'], true)) {
+    http_response_code(400);
+    die('Ongeldige status');
+  }
+
+  // check: regel hoort bij dit project
+  $chk = $pdo->prepare("SELECT 1 FROM time_entries WHERE id=? AND project_id=?");
+  $chk->execute([$entryId, $projectId]);
+  if (!$chk->fetch()) {
+    http_response_code(404);
+    die('Urenregel niet gevonden');
+  }
+
+  $upd = $pdo->prepare("UPDATE time_entries SET status=?, updated_at=NOW() WHERE id=?");
+  $upd->execute([$status, $entryId]);
+
+  redirect("project.php?id={$projectId}&ok=status_updated");
+}
+
+
 // 6) Edit-mode voor urenregel (GET) + update (POST)
 $editEntryId = (int)($_GET['edit_entry'] ?? 0);
 $editEntry = null;
@@ -264,11 +296,16 @@ $st = $pdo->prepare($sql);
 $st->execute([$uid, $projectId]);
 $tasks = $st->fetchAll();
 
-// 2) Urenlijst 
+// 2) Urenlijst
 if ($isManager) {
   // Manager/admin: alle uren binnen dit project
   $sql = "
-  SELECT te.id, te.entry_date, te.hours, te.note,
+  SELECT te.id,
+         te.user_id,
+         te.entry_date,
+         te.hours,
+         te.note,
+         te.status,
          pt.name AS task_name,
          u.email AS user_email
   FROM time_entries te
@@ -282,7 +319,12 @@ if ($isManager) {
 } else {
   // Medewerker: alleen eigen uren binnen dit project
   $sql = "
-  SELECT te.id, te.entry_date, te.hours, te.note,
+  SELECT te.id,
+         te.user_id,
+         te.entry_date,
+         te.hours,
+         te.note,
+         te.status,
          pt.name AS task_name,
          u.email AS user_email
   FROM time_entries te
@@ -298,6 +340,10 @@ $entries = $st->fetchAll();
 
 // Totaal uren (alle regels die getoond worden)
 $totalHours = 0.0;
+foreach ($entries as $e) {
+  $totalHours += (float)$e['hours'];
+}
+
 foreach ($entries as $e) {
   $totalHours += (float)$e['hours'];
 }
@@ -568,41 +614,77 @@ foreach ($entries as $e) {
       <p class="muted">Nog geen uren geboekt op dit project.</p>
     <?php else: ?>
           <table>
-      <thead>
-        <tr>
-          <th>Datum</th>
-          <th>Taak</th>
-          <th>Uren</th>
-          <?php if ($isManager): ?>
-            <th>Gebruiker</th>
+  <thead>
+    <tr>
+      <th>Datum</th>
+      <th>Taak</th>
+      <th>Uren</th>
+      <?php if ($isManager): ?>
+        <th>Gebruiker</th>
+      <?php endif; ?>
+      <th>Status</th>
+      <th>Notitie</th>
+      <th>Acties</th>
+    </tr>
+  </thead>
+  <tbody>
+    <?php foreach ($entries as $e): ?>
+      <?php $canEditOwn = ((int)($e['user_id'] ?? 0) === $uid); ?>
+      <tr>
+        <td><?=h($e['entry_date'])?></td>
+        <td><?=h($e['task_name'] ?? '—')?></td>
+        <td><?=h($e['hours'])?></td>
+
+        <?php if ($isManager): ?>
+          <td><?=h($e['user_email'] ?? '')?></td>
+        <?php endif; ?>
+
+        <td>
+          <?php if ($e['status'] === 'approved'): ?>
+            <span class="badge status-approved">Goedgekeurd</span>
+          <?php elseif ($e['status'] === 'rejected'): ?>
+            <span class="badge status-rejected">Afgewezen</span>
+          <?php else: ?>
+            <span class="badge status-pending">In afwachting</span>
           <?php endif; ?>
-          <th>Notitie</th>
-          <th>Acties</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php foreach ($entries as $e): ?>
-          <tr>
-            <td><?=h($e['entry_date'])?></td>
-            <td><?=h($e['task_name'] ?? '—')?></td>
-            <td><?=h($e['hours'])?></td>
-            <?php if ($isManager): ?>
-              <td><?=h($e['user_email'] ?? '')?></td>
-            <?php endif; ?>
-            <td><?=nl2br(h($e['note']))?></td>
-            <td style="white-space:nowrap">
-                <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_entry=<?=$e['id']?>">Bewerk</a>
-                <form method="post" action="project.php?id=<?=$projectId?>" style="display:inline" onsubmit="return confirm('Urenregel verwijderen?');">
-                  <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-                  <input type="hidden" name="mode" value="delete_entry">
-                  <input type="hidden" name="entry_id" value="<?=$e['id']?>">
-                  <button class="btn btn-danger" type="submit">Verwijder</button>
-                </form>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
+
+          <?php if ($isManager): ?>
+            <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+              <form method="post" action="project.php?id=<?=$projectId?>">
+                <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+                <input type="hidden" name="mode" value="set_entry_status">
+                <input type="hidden" name="entry_id" value="<?=$e['id']?>">
+                <input type="hidden" name="status" value="approved">
+                <button type="submit" class="btn btn-secondary" style="padding:2px 6px;font-size:.75rem;">Keur goed</button>
+              </form>
+              <form method="post" action="project.php?id=<?=$projectId?>">
+                <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+                <input type="hidden" name="mode" value="set_entry_status">
+                <input type="hidden" name="entry_id" value="<?=$e['id']?>">
+                <input type="hidden" name="status" value="rejected">
+                <button type="submit" class="btn btn-danger" style="padding:2px 6px;font-size:.75rem;">Wijs af</button>
+              </form>
+            </div>
+          <?php endif; ?>
+        </td>
+
+        <td><?=nl2br(h($e['note']))?></td>
+        <td style="white-space:nowrap">
+          <?php if ($canEditOwn): ?>
+            <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_entry=<?=$e['id']?>">Bewerk</a>
+            <form method="post" action="project.php?id=<?=$projectId?>" style="display:inline" onsubmit="return confirm('Urenregel verwijderen?');">
+              <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+              <input type="hidden" name="mode" value="delete_entry">
+              <input type="hidden" name="entry_id" value="<?=$e['id']?>">
+              <button class="btn btn-danger" type="submit">Verwijder</button>
+            </form>
+          <?php endif; ?>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+  </tbody>
+</table>
+
     <?php endif; ?>
   </div>
 </body>
