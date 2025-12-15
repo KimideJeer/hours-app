@@ -149,45 +149,76 @@ $showAll = ($_GET['show'] ?? '') === 'all';
 $params = [];
 $where  = [];
 
-// Manager/admin ziet alle projecten + alle uren
-// Manager/admin ziet alle projecten + alle uren
+// Manager/admin ziet alle projecten + alle goedgekeurde uren op actieve taken
 if ($isManager) {
     if (!$showAll) {
         $where[] = "p.is_active = 1";
     }
 
     $sql = "
-    SELECT p.id, p.name, p.is_active,
-           COALESCE(SUM(te.hours),0) AS total_hours
+    SELECT
+        p.id,
+        p.name,
+        p.is_active,
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN te.status = 'approved'
+                         AND (t.is_active = 1 OR t.id IS NULL)
+                    THEN te.hours
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS total_hours
     FROM projects p
     LEFT JOIN time_entries te
       ON te.project_id = p.id
+    LEFT JOIN project_tasks t
+      ON t.id = te.task_id
     ";
 } else {
-    // Medewerker: alleen eigen projecten + eigen uren
+    // Medewerker: alleen eigen projecten + eigen goedgekeurde uren op actieve taken
     $sql = "
-    SELECT p.id, p.name, p.is_active,
-           COALESCE(SUM(te.hours),0) AS total_hours
+    SELECT
+        p.id,
+        p.name,
+        p.is_active,
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN te.status = 'approved'
+                         AND (t.is_active = 1 OR t.id IS NULL)
+                    THEN te.hours
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS total_hours
     FROM projects p
     LEFT JOIN time_entries te
       ON te.project_id = p.id
      AND te.user_id    = ?
+    LEFT JOIN project_tasks t
+      ON t.id = te.task_id
     ";
 
-    // WHERE-deel: p.user_id = ? + eventueel is_active
+    // alleen projecten van deze gebruiker
     $where[] = "p.user_id = ?";
     if (!$showAll) {
         $where[] = "p.is_active = 1";
     }
 
-    // ⚠️ heel belangrijk: twee keer $uid, voor de twee vraagtekens
+    // twee vraagtekens: één voor te.user_id, één voor p.user_id
     $params = [$uid, $uid];
 }
 
+// WHERE-deel toevoegen
 if ($where) {
     $sql .= " WHERE " . implode(" AND ", $where);
 }
 
+// Groeperen en sorteren
 $sql .= "
   GROUP BY p.id, p.name, p.is_active
   ORDER BY p.is_active DESC, p.name ASC
@@ -199,29 +230,29 @@ $projects = $st->fetchAll();
 
 // Taken per project
 if ($isManager) {
-  // Manager/admin: alle taken van alle projecten
-  $taskStmt = $pdo->query("
-    SELECT pt.id, pt.project_id, pt.name, pt.is_active
-    FROM project_tasks pt
-    WHERE pt.is_active = 1
-    ORDER BY pt.project_id, pt.name
-  ");
+    // Manager/admin: taken van alle projecten
+    $taskStmt = $pdo->query("
+        SELECT pt.id, pt.project_id, pt.name, pt.is_active
+        FROM project_tasks pt
+        WHERE pt.is_active = 1
+        ORDER BY pt.project_id, pt.name
+    ");
 } else {
-  // Medewerker: alleen taken van eigen projecten
-  $taskStmt = $pdo->prepare("
-    SELECT pt.id, pt.project_id, pt.name, pt.is_active
-    FROM project_tasks pt
-    JOIN projects p ON p.id = pt.project_id
-    WHERE pt.is_active = 1
-      AND p.user_id = ?
-    ORDER BY pt.project_id, pt.name
-  ");
-  $taskStmt->execute([$uid]);
+    // Medewerker: alleen taken van eigen projecten
+    $taskStmt = $pdo->prepare("
+        SELECT pt.id, pt.project_id, pt.name, pt.is_active
+        FROM project_tasks pt
+        JOIN projects p ON p.id = pt.project_id
+        WHERE pt.is_active = 1
+          AND p.user_id = ?
+        ORDER BY pt.project_id, pt.name
+    ");
+    $taskStmt->execute([$uid]);
 }
 
 $tasksByProject = [];
 foreach ($taskStmt as $row) {
-  $tasksByProject[(int)$row['project_id']][] = $row;
+    $tasksByProject[(int)$row['project_id']][] = $row;
 }
 ?>
 <!doctype html>

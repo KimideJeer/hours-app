@@ -368,24 +368,28 @@ if ($isManager) {
 $entries = $st->fetchAll();
 
 // Totaal uren opnieuw berekenen via SQL,
-// zodat het altijd overeenkomt met de definitie:
 // - alleen 'approved' uren
+// - alleen taken die nog actief zijn (t.is_active = 1)
 // - manager: alle users, medewerker: alleen eigen user
 if ($isManager) {
     $sumStmt = $pdo->prepare("
-        SELECT COALESCE(SUM(hours), 0) AS total
-        FROM time_entries
-        WHERE project_id = ?
-          AND status = 'approved'
+        SELECT COALESCE(SUM(te.hours), 0) AS total
+        FROM time_entries te
+        JOIN project_tasks t ON t.id = te.task_id
+        WHERE te.project_id = ?
+          AND te.status = 'approved'
+          AND t.is_active = 1
     ");
     $sumStmt->execute([$projectId]);
 } else {
     $sumStmt = $pdo->prepare("
-        SELECT COALESCE(SUM(hours), 0) AS total
-        FROM time_entries
-        WHERE project_id = ?
-          AND user_id = ?
-          AND status = 'approved'
+        SELECT COALESCE(SUM(te.hours), 0) AS total
+        FROM time_entries te
+        JOIN project_tasks t ON t.id = te.task_id
+        WHERE te.project_id = ?
+          AND te.user_id = ?
+          AND te.status = 'approved'
+          AND t.is_active = 1
     ");
     $sumStmt->execute([$projectId, $uid]);
 }
@@ -394,7 +398,7 @@ $totalHours = (float)$sumStmt->fetchColumn();
 
 
 
-  
+
 
 ?>
 <!doctype html>
