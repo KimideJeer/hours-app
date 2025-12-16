@@ -168,14 +168,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'add_tim
   }
 }
 
-// 5) Urenregel verwijderen (alleen je eigen regel)
+// 5) Urenregel verwijderen (alleen eigen & alleen pending)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'delete_entry')) {
   if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
   $entryId = (int)($_POST['entry_id'] ?? 0);
-  $chk = $pdo->prepare("SELECT 1 FROM time_entries WHERE id=? AND user_id=? AND project_id=?");
+
+  // alleen eigen pending-regel mag weg
+  $chk = $pdo->prepare("
+    SELECT 1
+    FROM time_entries
+    WHERE id=? AND user_id=? AND project_id=? AND status='pending'
+  ");
   $chk->execute([$entryId, $uid, $projectId]);
-  if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
-  $pdo->prepare("DELETE FROM time_entries WHERE id=?")->execute([$entryId]);
+  if (!$chk->fetch()) {
+    http_response_code(403);
+    die('Niet toegestaan');
+  }
+
+  $pdo->prepare("
+    DELETE FROM time_entries
+    WHERE id=? AND user_id=? AND project_id=? AND status='pending'
+  ")->execute([$entryId, $uid, $projectId]);
+
   redirect("project.php?id={$projectId}&ok=entry_deleted");
 }
 
@@ -227,13 +241,17 @@ if ($editEntryId > 0) {
   $st = $pdo->prepare("
     SELECT te.id, te.entry_date, te.hours, te.note, te.task_id
     FROM time_entries te
-    WHERE te.id=? AND te.user_id=? AND te.project_id=?");
+    WHERE te.id=? AND te.user_id=? AND te.project_id=? AND te.status = 'pending'");
   $st->execute([$editEntryId, $uid, $projectId]);
   $editEntry = $st->fetch();
 }
 
+// 6) Urenregel bijwerken (alleen eigen & alleen pending)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'update_entry')) {
-  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) {
+    http_response_code(400);
+    die('Invalid CSRF');
+  }
 
   $entryId    = (int)($_POST['entry_id'] ?? 0);
   $entry_date = $_POST['entry_date'] ?? '';
@@ -241,34 +259,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'update
   $hours      = $_POST['hours'] ?? '';
   $note       = trim($_POST['note'] ?? '');
 
-  $chk = $pdo->prepare("SELECT 1 FROM time_entries WHERE id=? AND user_id=? AND project_id=?");
+  // alleen eigen PENDING-regel mag geüpdatet worden
+  $chk = $pdo->prepare("
+    SELECT 1
+    FROM time_entries
+    WHERE id=? AND user_id=? AND project_id=? AND status='pending'
+  ");
   $chk->execute([$entryId, $uid, $projectId]);
-  if (!$chk->fetch()) { http_response_code(403); die('Niet toegestaan'); }
+  if (!$chk->fetch()) {
+    http_response_code(403);
+    die('Niet toegestaan');
+  }
 
-  if (!$entry_date || !DateTime::createFromFormat('Y-m-d', $entry_date)) { $errors['edit_entry_date'] = 'Datum (YYYY-MM-DD)'; }
-  if ($task_id <= 0) { $errors['edit_task_id'] = 'Kies een taak.'; }
-  if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) { $errors['edit_hours'] = '0 < uren ≤ 24.'; }
+  // validatie
+  if (!$entry_date || !DateTime::createFromFormat('Y-m-d', $entry_date)) {
+    $errors['edit_entry_date'] = 'Datum (YYYY-MM-DD)';
+  }
+  if ($task_id <= 0) {
+    $errors['edit_task_id'] = 'Kies een taak.';
+  }
+  if ($hours === '' || !is_numeric($hours) || $hours <= 0 || $hours > 24) {
+    $errors['edit_hours'] = '0 < uren ≤ 24.';
+  }
 
   if ($task_id > 0) {
     $chk2 = $pdo->prepare("SELECT 1 FROM project_tasks WHERE id=? AND project_id=?");
     $chk2->execute([$task_id, $projectId]);
-    if (!$chk2->fetch()) { $errors['edit_task_id'] = 'Ongeldige taak voor dit project.'; }
+    if (!$chk2->fetch()) {
+      $errors['edit_task_id'] = 'Ongeldige taak voor dit project.';
+    }
   }
 
   if (!$errors) {
     $upd = $pdo->prepare("
       UPDATE time_entries
       SET entry_date=?, task_id=?, hours=?, note=?, updated_at=NOW()
-      WHERE id=? AND user_id=? AND project_id=?");
+      WHERE id=? AND user_id=? AND project_id=? AND status='pending'
+    ");
     $upd->execute([$entry_date, $task_id, $hours, $note ?: null, $entryId, $uid, $projectId]);
     redirect("project.php?id={$projectId}&ok=entry_updated");
   } else {
     $editEntry = [
-      'id' => $entryId,
+      'id'         => $entryId,
       'entry_date' => $entry_date,
-      'task_id' => $task_id,
-      'hours' => $hours,
-      'note' => $note,
+      'task_id'    => $task_id,
+      'hours'      => $hours,
+      'note'       => $note,
     ];
   }
 }
@@ -684,8 +720,14 @@ $totalHours = (float)$sumStmt->fetchColumn();
     </tr>
   </thead>
   <tbody>
-    <?php foreach ($entries as $e): ?>
-      <?php $canEditOwn = ((int)($e['user_id'] ?? 0) === $uid); ?>
+   <?php foreach ($entries as $e): ?>
+  <?php
+    $canEditOwn = (
+      ((int)($e['user_id'] ?? 0) === $uid)
+      && ($e['status'] === 'pending')
+    );
+  ?>
+
       <tr>
         <td><?=h($e['entry_date'])?></td>
         <td><?=h($e['task_name'] ?? '—')?></td>
