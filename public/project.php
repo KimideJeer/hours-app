@@ -52,21 +52,49 @@ if (!$project) {
 // HANDLERS (alleen eigenaar komt hier, want pagina is al gescoped)
 // -------------------------------------------------------------
 
-// 0) Project hernoemen
+// 0) Project hernoemen + urenbudget bijwerken
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (($_POST['mode'] ?? '') === 'rename_project')) {
-  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) { http_response_code(400); die('Invalid CSRF'); }
+  if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) {
+    http_response_code(400);
+    die('Invalid CSRF');
+  }
+
   $newName = trim($_POST['project_name'] ?? '');
-  if ($newName === '') { $errors['project_name'] = 'Projectnaam is verplicht.'; }
+  if ($newName === '') {
+    $errors['project_name'] = 'Projectnaam is verplicht.';
+  }
+
+  // Urenbudget uit formulier halen (optioneel)
+  $plannedRaw = $_POST['planned_hours'] ?? '';
+  $planned = null;
+  if ($plannedRaw !== '') {
+    if (!is_numeric($plannedRaw) || (float)$plannedRaw < 0 || (float)$plannedRaw > 10000) {
+      $errors['planned_hours'] = 'Geef een geldig urenbudget tussen 0 en 10000.';
+    } else {
+      $planned = (float)$plannedRaw;
+    }
+  }
+
   if (!$errors) {
     try {
-      $pdo->prepare("UPDATE projects SET name=? WHERE id=? AND user_id=?")->execute([$newName, $projectId, $uid]);
+      $st = $pdo->prepare("
+        UPDATE projects
+        SET name = ?, planned_hours = ?
+        WHERE id = ? AND user_id = ?
+      ");
+      $st->execute([$newName, $planned, $projectId, $uid]);
+
       redirect("project.php?id={$projectId}&ok=project_renamed");
     } catch (PDOException $e) {
-      if ($e->getCode() === '23000') { $errors['project_name'] = 'Deze projectnaam bestaat al.'; }
-      else { throw $e; }
+      if ($e->getCode() === '23000') {
+        $errors['project_name'] = 'Deze projectnaam bestaat al.';
+      } else {
+        throw $e;
+      }
     }
   }
 }
+
 
 // 1) Taak aanmaken
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'create_task') {
@@ -465,24 +493,42 @@ $totalHours = (float)$sumStmt->fetchColumn();
 </head>
 <body>
   <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div>
-      <h1 style="margin-bottom:6px"><?=h($project['name'])?></h1>
-      <?php if ((int)$project['is_active'] === 0): ?><span class="badge inactive">inactief</span><?php endif; ?>
-      <div class="muted">Totaal uren: <strong><?=number_format($totalHours,2)?></strong></div>
+<div>
+  <h1 style="margin-bottom:6px"><?=h($project['name'])?></h1>
+  <?php if ((int)$project['is_active'] === 0): ?>
+    <span class="badge inactive">inactief</span>
+  <?php endif; ?>
 
-      <!-- Actie: project bewerken via edit-mode -->
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_project=1">Bewerk</a>
-      </div>
+  <div class="muted">
+    Totaal uren: <strong><?=number_format($totalHours,2)?></strong>
+  </div>
+
+  <?php
+  $planned = $project['planned_hours'] ?? null;
+  if ($planned !== null && $planned > 0):
+      $plannedFloat = (float)$planned;
+      $ratio = $plannedFloat > 0 ? ($totalHours / $plannedFloat) : 0;
+      $perc  = round($ratio * 100);
+  ?>
+    <div class="muted" style="margin-top:4px;">
+      Budget: <strong><?=number_format($plannedFloat,2)?></strong> uur —
+      gebruikt: <strong><?=number_format($totalHours,2)?></strong> (<?=$perc?>%)
+      <?php if ($ratio > 1): ?>
+        <span class="badge status-rejected">Over budget</span>
+      <?php elseif ($ratio >= 0.8): ?>
+        <span class="badge status-pending">Bijna vol</span>
+      <?php else: ?>
+        <span class="badge status-approved">Binnen budget</span>
+      <?php endif; ?>
     </div>
-    <nav class="muted">
-      Ingelogd als <strong><?=h(currentUserEmail())?></strong>
-      —
-      <form method="post" action="logout.php">
-        <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-        <button type="submit" class="btn btn-secondary">Uitloggen</button>
-      </form>
-    </nav>
+  <?php endif; ?>
+
+  <!-- Actie: project bewerken via edit-mode -->
+  <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+    <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>&edit_project=1">Bewerk</a>
+  </div>
+</div>
+
   </header>
 
   <?php if ($flash): ?>
@@ -505,26 +551,41 @@ $totalHours = (float)$sumStmt->fetchColumn();
 
 
   <!-- Project bewerken (paneel) -->
-  <?php if ($editProject): ?>
-    <div class="card">
-      <h3>Project bewerken</h3>
-      <form method="post" action="project.php?id=<?=$projectId?>">
-        <input type="hidden" name="csrf" value="<?=h($csrf)?>">
-        <input type="hidden" name="mode" value="rename_project">
+<?php if ($editProject): ?>
+  <div class="card">
+    <h3>Project bewerken</h3>
+    <form method="post" action="project.php?id=<?=$projectId?>">
+      <input type="hidden" name="csrf" value="<?=h($csrf)?>">
+      <input type="hidden" name="mode" value="rename_project">
 
-        <label>Projectnaam</label>
-        <input type="text" name="project_name" value="<?=h($project['name'])?>" required>
-        <?php if(isset($errors['project_name'])): ?>
-          <div class="muted" style="color:#b91c1c"><?=$errors['project_name']?></div>
-        <?php endif; ?>
+      <label>Projectnaam</label>
+      <input type="text" name="project_name" value="<?=h($project['name'])?>" required>
+      <?php if(isset($errors['project_name'])): ?>
+        <div class="muted" style="color:#b91c1c"><?=$errors['project_name']?></div>
+      <?php endif; ?>
 
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn" type="submit">Opslaan</button>
-          <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>">Annuleren</a>
-        </div>
-      </form>
-    </div>
-  <?php endif; ?>
+      <label>Urenbudget (optioneel)</label>
+      <input
+        type="number"
+        name="planned_hours"
+        step="0.25"
+        min="0"
+        max="10000"
+        value="<?=h($project['planned_hours'] ?? '')?>"
+        placeholder="Bijv. 40"
+      >
+      <?php if(isset($errors['planned_hours'])): ?>
+        <div class="muted" style="color:#b91c1c"><?=$errors['planned_hours']?></div>
+      <?php endif; ?>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" type="submit">Opslaan</button>
+        <a class="btn btn-secondary" href="project.php?id=<?=$projectId?>">Annuleren</a>
+      </div>
+    </form>
+  </div>
+<?php endif; ?>
+
 
   <p><a class="btn" href="projects.php">← Terug naar projecten</a></p>
 

@@ -160,6 +160,7 @@ if ($isManager) {
         p.id,
         p.name,
         p.is_active,
+        p.planned_hours,
         COALESCE(
             SUM(
                 CASE
@@ -184,6 +185,7 @@ if ($isManager) {
         p.id,
         p.name,
         p.is_active,
+        p.planned_hours,
         COALESCE(
             SUM(
                 CASE
@@ -203,13 +205,13 @@ if ($isManager) {
       ON t.id = te.task_id
     ";
 
-    // alleen projecten van deze gebruiker
-    $where[] = "p.user_id = ?";
     if (!$showAll) {
         $where[] = "p.is_active = 1";
     }
+    // alleen projecten van deze gebruiker
+    $where[] = "p.user_id = ?";
 
-    // twee vraagtekens: één voor te.user_id, één voor p.user_id
+    // twee ? in de query: te.user_id en p.user_id
     $params = [$uid, $uid];
 }
 
@@ -220,7 +222,7 @@ if ($where) {
 
 // Groeperen en sorteren
 $sql .= "
-  GROUP BY p.id, p.name, p.is_active
+  GROUP BY p.id, p.name, p.is_active, p.planned_hours
   ORDER BY p.is_active DESC, p.name ASC
 ";
 
@@ -354,12 +356,32 @@ foreach ($taskStmt as $row) {
 <div class="grid">
   <?php foreach ($projects as $p): $pid=(int)$p['id']; $inactive = !$p['is_active']; ?>
     <div class="card">
-      <h3 style="margin:0 0 8px">
-        <?=h($p['name'])?>
-        <?php if ($inactive): ?><span class="badge inactive">inactief</span><?php endif; ?>
-      </h3>
+  <h3 style="margin:0 0 8px">
+    <?=h($p['name'])?>
+    <?php if ($inactive): ?><span class="badge inactive">inactief</span><?php endif; ?>
+  </h3>
 
-      <div><strong>Totaal uren:</strong> <?=number_format((float)$p['total_hours'],2)?></div>
+  <div><strong>Totaal uren:</strong> <?=number_format((float)$p['total_hours'],2)?></div>
+
+  <?php
+    $planned = $p['planned_hours'] ?? null;
+    if ($planned !== null && $planned !== ''):
+        $plannedFloat = (float)$planned;
+        $ratio = $plannedFloat > 0 ? ($p['total_hours'] / $plannedFloat) : 0;
+        $perc  = round($ratio * 100);
+  ?>
+    <div class="muted" style="margin-top:4px;">
+      Budget: <strong><?=number_format($plannedFloat,2)?></strong> uur —
+      gebruikt: <strong><?=number_format((float)$p['total_hours'],2)?></strong> (<?=$perc?>%)
+      <?php if ($ratio > 1): ?>
+        <span class="badge status-rejected">Over budget</span>
+      <?php elseif ($ratio >= 0.8): ?>
+        <span class="badge status-pending">Bijna vol</span>
+      <?php else: ?>
+        <span class="badge status-approved">Binnen budget</span>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <a class="btn" href="project.php?id=<?=$pid?>">Open project</a>
