@@ -471,25 +471,7 @@ $totalHours = (float)$sumStmt->fetchColumn();
   <meta charset="utf-8">
   <title>Project – <?=h($project['name'])?></title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px}
-    h1,h2,h3{margin:0 0 12px}
-    .muted{color:#6b7280}
-    a.btn{display:inline-block;background:#111827;color:#fff;text-decoration:none;border-radius:8px;padding:8px 12px;margin-top:8px}
-    .btn{background:#111827;color:#fff;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}
-    .btn-secondary{background:#6b7280}
-    .btn-danger{background:#b91c1c}
-    .btn-danger.disabled{ background:#e5e7eb; color:#9ca3af; border:1px dashed #d1d5db; cursor:not-allowed; }
-    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#fff;margin-bottom:12px}
-    input,select,textarea{width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0 10px}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left}
-    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.8rem;border:1px solid #e5e7eb}
-    .badge.inactive{background:#fff7ed;border-color:#fdba74;color:#9a3412}
-    .ok{background:#ecfdf5;border:1px solid #10b98133;padding:10px;border-radius:8px;color:#065f46;margin-bottom:12px}
-    nav form { display:inline; margin:0; }
-  </style>
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">

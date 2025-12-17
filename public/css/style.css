@@ -1,0 +1,299 @@
+/* =====================================================
+   ALGEMENE LAYOUT & TYPOGRAFIE
+   Geldt voor bijna alle pagina's (projecten, project, etc.)
+   ===================================================== */
+body {
+  font-family: system-ui, Segoe UI, Arial, sans-serif;
+  max-width: 1000px;
+  margin: 24px auto;
+  padding: 0 16px;
+  background: #f8fafc;
+}
+
+/* Standaard marges voor koppen */
+h1, h2, h3 {
+  margin: 0 0 12px;
+}
+
+/* Gedempte, secundaire tekst */
+.muted {
+  color: #6b7280;
+}
+
+/* Flash / succesmeldingen (bijv. ?ok=...) */
+.ok {
+  background: #ecfdf5;
+  border: 1px solid #10b98133;
+  padding: 10px;
+  border-radius: 8px;
+  color: #065f46;
+  margin-bottom: 12px;
+}
+
+/* Kleine foutmeldingen onder velden */
+.error {
+  color: #b91c1c;
+  font-size: 0.9rem;
+}
+
+/* =====================================================
+   LAYOUT: GRID & CARDS
+   ===================================================== */
+
+/* Grid voor project-overzicht (cards naast elkaar) */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+/* Algemene card-stijl (zowel projecten als detailpagina) */
+.card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+/* Op de login/registratie-pagina overschrijven we dit
+   iets met .auth-page .card (zie verderop) */
+
+/* Extra grid voor formulieren met 2 kolommen (bv. uren toevoegen) */
+.row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+/* =====================================================
+   BUTTONS & LINKS
+   ===================================================== */
+
+/* Link-stijl die eruitziet als een knop */
+a.btn {
+  display: inline-block;
+  background: #111827;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+}
+
+/* Basis button */
+.btn {
+  background: #111827;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+/* Primaire actie-knop (bijv. "Opslaan") */
+.btn-primary {
+  background: #111827;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
+/* Secundaire knop (grijs) */
+.btn-secondary {
+  background: #6b7280;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+/* Gevaar-knop (verwijderen, afwijzen, etc.) */
+.btn-danger {
+  background: #b91c1c;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+/* Geblokkeerde verwijder-knop (bijv. project eerst deactiveren) */
+.btn-danger.disabled {
+  background: #e5e7eb;
+  color: #9ca3af;
+  border: 1px dashed #d1d5db;
+  cursor: not-allowed;
+}
+
+/* Pictogram in verwijderknop (🗑️ / 🔒) iets ruimte geven */
+.btn-danger .icon {
+  margin-right: 6px;
+}
+
+/* Zorg dat logout-form in de nav naast de tekst staat */
+nav form {
+  display: inline;
+  margin: 0;
+}
+
+/* Linkjes in nav iets ruimte geven */
+nav a {
+  margin-left: 8px;
+}
+
+/* =====================================================
+   FORMULIEREN & INPUTS
+   ===================================================== */
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  margin: 6px 0 10px;
+}
+
+/* Labels op login / formulieren iets vetter */
+label {
+  font-weight: 600;
+}
+
+/* =====================================================
+   TABELLEN (urenoverzicht e.d.)
+   ===================================================== */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 8px;
+  text-align: left;
+}
+
+/* =====================================================
+   BADGES (status, inactief, budget)
+   ===================================================== */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  border: 1px solid #e5e7eb;
+}
+
+/* Project / taak is inactief */
+.badge.inactive {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+/* Urenstatus: goedgekeurd */
+.badge.status-approved {
+  background: #ecfdf5;
+  border-color: #22c55e;
+  color: #166534;
+}
+
+/* Urenstatus of budgetstatus: afgewezen / over budget */
+.badge.status-rejected {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+/* Urenstatus of budgetstatus: in afwachting / bijna vol */
+.badge.status-pending {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+/* =====================================================
+   PROJECT-OVERZICHT (projects.php) SPECIFIEK
+   ===================================================== */
+
+/* Header van de pagina: titel + gebruiker + uitloggen naast elkaar */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+/* Details / summary voor "Uren toevoegen" uitklapper */
+details {
+  margin-top: 10px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* =====================================================
+   AUTH PAGINA'S (login.php) – VOLLEDIG CENTREREN
+   ===================================================== */
+
+/* Voor login/registratie pag's: <body class="auth-page"> gebruiken */
+body.auth-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  margin: 0;
+  max-width: none;   /* overschrijft max-width uit body */
+  padding: 0;        /* geen extra padding rondom */
+}
+
+/* Card op login/registratie-pagina: iets breder + schaduw */
+body.auth-page .card {
+  width: min(520px, 92vw);
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .06);
+}
+
+/* Tabs bovenaan login/registratie (indien gebruikt) */
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f3f4f6;
+  text-decoration: none;
+  color: #111827;
+}
+
+.tab.active {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+
+/* Knop op auth-pagina full-width (login-knop) */
+body.auth-page .btn {
+  width: 100%;
+  padding: 10px 14px;
+}
+
+/* Kleinere muted tekst op auth-pagina (bijv. "Nog geen account?") */
+body.auth-page .muted {
+  font-size: 0.9rem;
+}

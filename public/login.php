@@ -117,19 +117,7 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   <meta charset="utf-8">
   <title>Inloggen / Registreren</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;display:grid;place-items:center;min-height:100dvh;margin:0;background:#f8fafc}
-    .card{width:min(520px,92vw);background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-    h1{margin:0 0 16px}
-    .tabs{display:flex;gap:8px;margin-bottom:16px}
-    .tab{flex:1;text-align:center;border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#f3f4f6;text-decoration:none;color:#111827}
-    .tab.active{background:#111827;color:#fff;border-color:#111827}
-    label{font-weight:600}
-    input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0 12px}
-    .btn{background:#111827;color:#fff;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;width:100%}
-    .error{color:#b91c1c;margin:6px 0 8px}
-    .muted{color:#6b7280;font-size:.9rem}
-  </style>
+      <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <div class="card">

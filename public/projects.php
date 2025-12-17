@@ -263,36 +263,7 @@ foreach ($taskStmt as $row) {
   <meta charset="utf-8">
   <title>Projecten – Uren</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px}
-    h1{margin:0 0 12px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#fff}
-    .muted{color:#6b7280}
-    a.btn{display:inline-block;background:#111827;color:#fff;text-decoration:none;border-radius:8px;padding:8px 12px;margin-top:8px}
-    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-    nav a{margin-left:8px}
-    details{margin-top:10px}
-    summary{cursor:pointer;font-weight:600}
-    input,select,textarea{width:100%;padding:9px;border:1px solid #d1d5db;border-radius:8px;margin:6px 0 10px}
-    .btn-primary{background:#111827;color:#fff;border:0;border-radius:8px;padding:9px 12px;cursor:pointer}
-    .btn-danger{background:#b91c1c;color:#fff;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}
-    .btn-secondary{background:#6b7280;color:#fff;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}
-    .error{color:#b91c1c;font-size:.9rem}
-    .row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
-    .ok{background:#ecfdf5;border:1px solid #10b98133;padding:10px;border-radius:8px;color:#065f46;margin-bottom:12px}
-    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.8rem;border:1px solid #e5e7eb}
-    .badge.inactive{background:#fff7ed;border-color:#fdba74;color:#9a3412}
-
-    .btn-danger.disabled{
-      background:#e5e7eb;
-      color:#9ca3af;
-      border:1px dashed #d1d5db;
-      cursor:not-allowed;
-    }
-    .btn-danger .icon{ margin-right:6px; }
-    nav form { display:inline; margin:0; }
-  </style>
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <header>
